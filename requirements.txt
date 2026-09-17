@@ -1,0 +1,43 @@
+# Pinned floors only — resolve exact versions with `pip-compile` or `uv lock`
+# before anything that has to be reproducible.  See pyproject.toml for the
+# authoritative dependency groups.
+
+# --- API ------------------------------------------------------------------
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+python-multipart>=0.0.9
+
+# --- Database -------------------------------------------------------------
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
+alembic>=1.13
+pgvector>=0.3          # optional; guarded by PGVECTOR_ENABLED
+
+# --- Scientific core ------------------------------------------------------
+numpy>=1.26
+scipy>=1.13
+pandas>=2.2
+
+# --- Materials descriptors ------------------------------------------------
+pymatgen>=2024.5.1
+matminer>=0.9.2
+
+# --- Bayesian optimization ------------------------------------------------
+torch>=2.3
+gpytorch>=1.11
+botorch>=0.11
+
+# --- RAG ------------------------------------------------------------------
+langchain>=0.2
+langchain-core>=0.2
+langchain-community>=0.2
+langchain-text-splitters>=0.2
+langchain-ollama>=0.1
+pypdf>=4.2
+
+# --- Dev ------------------------------------------------------------------
+pytest>=8.2
+httpx>=0.27
+ruff>=0.5

@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.python-version
+
+# Test / typing caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Environment / secrets
+.env
+.env.local
+*.pem
+
+# Data — never commit raw corpora or exported analysis artifacts
+data/pdfs/*
+!data/pdfs/.gitkeep
+data/structures/*
+!data/structures/.gitkeep
+data/exports/*
+!data/exports/.gitkeep
+ollama/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

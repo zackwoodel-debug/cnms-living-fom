@@ -1,0 +1,132 @@
+/* Deliberately plain: a scaffold that a group can restyle, not a design system. */
+
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --panel-2: #1d212a;
+  --border: #2a2f3a;
+  --text: #e6e8ee;
+  --muted: #98a0b3;
+  --accent: #5ea9ff;
+  --ok: #4ec9a5;
+  --warn: #e8b552;
+  --bad: #e8736b;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono { font-family: var(--mono); font-size: 0.92em; }
+
+.app { max-width: 1200px; margin: 0 auto; padding: 0 20px 60px; }
+
+header.masthead {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 22px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+header.masthead h1 { font-size: 19px; margin: 0; letter-spacing: -0.01em; }
+header.masthead .subtitle { color: var(--muted); font-size: 13px; }
+
+nav.tabs { display: flex; gap: 4px; margin: 16px 0 22px; flex-wrap: wrap; }
+nav.tabs a {
+  padding: 7px 13px;
+  border-radius: 7px;
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+nav.tabs a:hover { background: var(--panel); text-decoration: none; }
+nav.tabs a.active {
+  background: var(--panel-2);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  margin-bottom: 18px;
+}
+.panel h2 { margin: 0 0 4px; font-size: 15px; }
+.panel .hint { color: var(--muted); font-size: 12.5px; margin: 0 0 14px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+tbody tr:hover { background: var(--panel-2); }
+td.num, th.num { text-align: right; font-family: var(--mono); }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.badge.ok { color: var(--ok); border-color: #2e5f52; background: #14241f; }
+.badge.warn { color: var(--warn); border-color: #5f4f2b; background: #241f14; }
+.badge.bad { color: var(--bad); border-color: #5f3330; background: #241616; }
+.badge.muted { color: var(--muted); border-color: var(--border); background: var(--panel-2); }
+
+.notice {
+  border-left: 3px solid var(--warn);
+  background: #201b12;
+  color: #f0dcb4;
+  padding: 10px 14px;
+  border-radius: 0 7px 7px 0;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.notice.bad { border-color: var(--bad); background: #201414; color: #f3c8c4; }
+.notice.info { border-color: var(--accent); background: #121a24; color: #cfe2f7; }
+
+button {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+input, select, textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 7px 10px;
+  font: inherit;
+}
+input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); }
+
+.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.muted { color: var(--muted); }
+.stat { font-family: var(--mono); font-size: 22px; }
+
+/* Signed bar for the mediated-effect view: sign is the headline number, so it
+   has to be legible at a glance, not decoded from a minus sign. */
+.bar { display: flex; align-items: center; gap: 8px; }
+.bar .track { flex: 1; height: 8px; background: var(--panel-2); border-radius: 4px; position: relative; }
+.bar .fill { position: absolute; top: 0; height: 100%; border-radius: 4px; }
+.bar .fill.pos { background: var(--ok); left: 50%; }
+.bar .fill.neg { background: var(--bad); right: 50%; }
+.bar .zero { position: absolute; left: 50%; top: -3px; width: 1px; height: 14px; background: var(--border); }

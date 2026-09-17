@@ -1,0 +1,114 @@
+# ---------------------------------------------------------------------------
+# CNMS Living FOM — local stack: Postgres (+pgvector), Ollama, API, frontend.
+#
+#   cp .env.example .env
+#   docker compose up -d db ollama
+#   docker compose run --rm api cnms-fom init-db && docker compose run --rm api cnms-fom seed
+#   docker compose up -d api
+#   docker compose --profile frontend up -d frontend
+#
+# First run only, to pull the local models (a few GB):
+#   docker compose exec ollama ollama pull llama3.1:8b
+#   docker compose exec ollama ollama pull nomic-embed-text
+# ---------------------------------------------------------------------------
+
+services:
+  db:
+    # pgvector/pgvector ships the extension prebuilt; plain postgres:16 does not.
+    image: pgvector/pgvector:pg16
+    container_name: cnms-fom-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cnms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cnms}
+      POSTGRES_DB: ${POSTGRES_DB:-cnms_fom}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      # Runs only on first initialisation of an empty data directory.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cnms} -d ${POSTGRES_DB:-cnms_fom}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: cnms-fom-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # For NVIDIA GPUs, uncomment to get usable generation speed on a large model:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      args:
+        # Drop "bo" here for a much smaller image if this container does not run
+        # Bayesian optimization.
+        EXTRAS: descriptors,bo,rag,vector
+    container_name: cnms-fom-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-cnms}:${POSTGRES_PASSWORD:-cnms}@db:5432/${POSTGRES_DB:-cnms_fom}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-llama3.1:8b}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      PGVECTOR_ENABLED: ${PGVECTOR_ENABLED:-true}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PERMUTATION_B: ${PERMUTATION_B:-10000}
+      RANDOM_SEED: ${RANDOM_SEED:-20260823}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Corpus PDFs and exports. Ingest with the container path, e.g. /app/data/pdfs.
+      - ./data:/app/data
+      # Source mounted for development; drop this for a production deployment.
+      - ./backend:/app/backend
+
+  frontend:
+    profiles: ["frontend"]
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend.Dockerfile
+      target: dev
+    container_name: cnms-fom-frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      VITE_API_BASE_URL: http://localhost:${API_PORT:-8000}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  db_data:
+  ollama_models:

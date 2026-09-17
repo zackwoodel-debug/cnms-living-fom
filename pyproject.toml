@@ -1,0 +1,96 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cnms-living-fom"
+version = "0.1.0"
+description = "Physics-based, living figure-of-merit engine for autonomous materials discovery at CNMS."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Zack Woodel" }]
+keywords = ["materials", "figure-of-merit", "bayesian-optimization", "dielectrics", "CNMS"]
+
+dependencies = [
+  # API
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "python-multipart>=0.0.9",
+  # Database
+  "SQLAlchemy>=2.0",
+  "psycopg2-binary>=2.9",
+  "alembic>=1.13",
+  # Scientific core.  The FOM engine depends on nothing heavier than these.
+  "numpy>=1.26",
+  "scipy>=1.13",
+  "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+# Structural descriptors (pymatgen + matminer).  Heavy; imported lazily so the
+# API boots without them.
+descriptors = [
+  "pymatgen>=2024.5.1",
+  "matminer>=0.9.2",
+]
+
+# Bayesian optimization.  Heavy (pulls torch); imported lazily.
+bo = [
+  "torch>=2.3",
+  "gpytorch>=1.11",
+  "botorch>=0.11",
+]
+
+# Retrieval-augmented generation over the synthesis corpus, local-only via Ollama.
+rag = [
+  "langchain>=0.2",
+  "langchain-core>=0.2",
+  "langchain-community>=0.2",
+  "langchain-text-splitters>=0.2",
+  "langchain-ollama>=0.1",
+  "pypdf>=4.2",
+]
+
+# pgvector-backed similarity search.  Optional: without it the RAG store keeps
+# embeddings in a JSON column and ranks in Python.
+vector = ["pgvector>=0.3"]
+
+dev = [
+  "pytest>=8.2",
+  "httpx>=0.27",
+  "ruff>=0.5",
+  "mypy>=1.10",
+]
+
+all = ["cnms-living-fom[descriptors,bo,rag,vector,dev]"]
+
+[project.scripts]
+cnms-fom = "cnms_fom.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/cnms_fom"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["backend"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = [
+  "E501",  # line length is handled by the formatter
+  "B008",  # `Depends()` in a default is the FastAPI idiom, not a mutable default
+]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+files = ["backend/cnms_fom"]
