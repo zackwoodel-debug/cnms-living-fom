@@ -234,18 +234,20 @@ def compute_descriptors(material_id: int, db: Session = Depends(get_db)) -> Desc
     results = compute_geometric_descriptors(structure)
 
     warnings: list[str] = []
+    #  One query for every descriptor already on this material, rather than one
+    #  lookup per computed descriptor inside the loop. The unique constraint is
+    #  (material_id, descriptor_key, method), so that tuple is the natural key.
+    existing_by_key = {
+        (row.descriptor_key, row.method): row
+        for row in db.query(DescriptorValue)
+        .filter(DescriptorValue.material_id == material_id)
+        .all()
+    }
+
     for result in results:
         if result.note:
             warnings.append(f"{result.key}: {result.note}")
-        existing = (
-            db.query(DescriptorValue)
-            .filter(
-                DescriptorValue.material_id == material_id,
-                DescriptorValue.descriptor_key == result.key,
-                DescriptorValue.method == result.method,
-            )
-            .one_or_none()
-        )
+        existing = existing_by_key.get((result.key, result.method))
         if existing is None:
             db.add(
                 DescriptorValue(

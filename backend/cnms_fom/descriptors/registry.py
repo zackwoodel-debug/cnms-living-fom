@@ -56,6 +56,12 @@ class PropertySpec:
     #  Context fields that make the value meaningful (Sec. 16 checklist).
     required_context: tuple[str, ...] = field(default_factory=tuple)
     caveat: str = ""
+    #  Whether this property may appear in a composite score.  Some quantities
+    #  are worth storing and correlating without being application figures of
+    #  merit — scattering length density characterises a material precisely but
+    #  is not "better when larger" for any device.  ``direction`` is ignored
+    #  when this is False.
+    fom_eligible: bool = True
 
     def as_dict(self) -> dict:
         d = asdict(self)
@@ -209,7 +215,13 @@ PHYSICAL_PROPERTIES: dict[str, PropertySpec] = {
         units="dimensionless",
         interpretation="Electronic contribution in Eq. (11).",
         direction=Direction.BENEFIT,
-        required_context=("method", "xc_functional"),
+        required_context=("method",),
+        caveat=(
+            "Obtainable either from DFPT or from optical dispersion via eps = n^2 - k^2 in a "
+            "transparent window. `method` must say which, and a first-principles value must also "
+            "record `xc_functional` — demanding it unconditionally would reject every "
+            "experimentally derived value, which have no exchange-correlation functional."
+        ),
     ),
     "eps_ionic": PropertySpec(
         key="eps_ionic",
@@ -227,8 +239,13 @@ PHYSICAL_PROPERTIES: dict[str, PropertySpec] = {
         units="eV",
         interpretation="Leakage and reliability headroom.",
         direction=Direction.BENEFIT,
-        required_context=("method", "xc_functional"),
-        caveat="Semi-local DFT underestimates Eg; do not mix functionals within one analysis.",
+        required_context=("method",),
+        caveat=(
+            "Semi-local DFT underestimates Eg; do not mix functionals within one analysis, and "
+            "record `xc_functional` for any calculated value. An optical or photoemission gap "
+            "has no functional, and is also not the same quantity as a Kohn-Sham gap — `method` "
+            "is what distinguishes them."
+        ),
     ),
     "dEc": PropertySpec(
         key="dEc",
@@ -277,6 +294,32 @@ PHYSICAL_PROPERTIES: dict[str, PropertySpec] = {
         direction=Direction.BENEFIT,
         required_context=("temperature_k", "method"),
     ),
+    "sld_neutron": PropertySpec(
+        key="sld_neutron",
+        symbol="SLD_n",
+        name="Neutron scattering length density",
+        units="1e-6 A^-2",
+        interpretation=(
+            "Neutron contrast. Sets reflectivity and small-angle scattering, so it determines "
+            "whether a layer is visible in a neutron experiment at all."
+        ),
+        required_context=("method",),
+        fom_eligible=False,
+        caveat=(
+            "Isotope-dependent: a deuterated or isotopically enriched sample has a different "
+            "SLD at identical composition. Record the isotopic assumption in `method`."
+        ),
+    ),
+    "sld_xray": PropertySpec(
+        key="sld_xray",
+        symbol="SLD_x",
+        name="X-ray scattering length density",
+        units="1e-6 A^-2",
+        interpretation="X-ray contrast; drives XRR fitting of film thickness and density.",
+        required_context=("method",),
+        fom_eligible=False,
+        caveat="Energy-dependent. State the edge or wavelength (e.g. Cu K-alpha) in `method`.",
+    ),
     "alpha_th": PropertySpec(
         key="alpha_th",
         symbol="alpha_th",
@@ -299,6 +342,11 @@ def descriptor_dictionary() -> dict[str, list[dict]]:
         "structural_descriptors": [s.as_dict() for s in STRUCTURAL_DESCRIPTORS.values()],
         "physical_properties": [p.as_dict() for p in PHYSICAL_PROPERTIES.values()],
     }
+
+
+def fom_eligible_properties() -> dict[str, PropertySpec]:
+    """Properties that may legitimately appear in a composite score."""
+    return {k: v for k, v in PHYSICAL_PROPERTIES.items() if v.fom_eligible}
 
 
 def require_property(key: str) -> PropertySpec:

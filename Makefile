@@ -2,8 +2,8 @@
 # can also run directly.
 
 .PHONY: help install install-all test lint typecheck format \
-        db-init db-seed db-example serve frontend \
-        up down logs compliance clean
+        db-init db-migrate db-revision db-seed db-example serve frontend \
+        up down logs compliance ingest-survey clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -28,8 +28,14 @@ typecheck:  ## mypy over the backend, tsc over the frontend
 	mypy backend/cnms_fom || true
 	cd frontend && npx tsc --noEmit
 
-db-init:  ## Create tables and the pgvector extension
+db-init:  ## Bring the database to the current schema (runs migrations)
 	cnms-fom init-db
+
+db-migrate:  ## Apply outstanding migrations
+	cnms-fom migrate up
+
+db-revision:  ## Show the revision this database is at
+	cnms-fom migrate current
 
 db-seed:  ## Draft FOM definitions + placeholder instruments
 	cnms-fom seed
@@ -37,8 +43,11 @@ db-seed:  ## Draft FOM definitions + placeholder instruments
 db-example:  ## Load ILLUSTRATIVE modeled materials (never citable)
 	python scripts/load_example_data.py
 
-compliance:  ## FOM_PROOF Sec. 16 pre-release checklist
+compliance:  ## FOM_PROOF Sec. 16 pre-release checklist (incl. DB checks)
 	python scripts/check_protocol_compliance.py
+
+ingest-survey:  ## Report what an external materials DB contains. DB=path/to.db
+	python scripts/ingest_materials_db.py survey $(DB)
 
 serve:  ## Run the API with reload
 	cnms-fom serve --reload

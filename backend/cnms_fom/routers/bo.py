@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from cnms_fom.bo_engine.constraints import ConstraintSet, from_instrument_capabilities
 from cnms_fom.bo_engine.loop import Observation
@@ -37,12 +38,33 @@ def instruments() -> list[dict]:
 
 @router.get("/runs", response_model=list[BoRunOut])
 def list_runs(db: Session = Depends(get_db)) -> list[BoRunOut]:
-    runs = (
-        db.query(BoRun)
-        .options(selectinload(BoRun.observations), selectinload(BoRun.suggestions))
-        .order_by(BoRun.id.desc())
-        .all()
+    """List campaigns with their observation and suggestion counts.
+
+    The counts come from correlated subqueries rather than from eager-loading
+    the collections and calling ``len()``. A campaign that has been running for
+    a while holds thousands of observations, and materialising every one of them
+    to produce a single integer is the difference between a listing that stays
+    fast and one that degrades as the science progresses.
+    """
+    n_observations = (
+        select(func.count(BoObservation.id))
+        .where(BoObservation.bo_run_id == BoRun.id)
+        .correlate(BoRun)
+        .scalar_subquery()
     )
+    n_suggestions = (
+        select(func.count(BoSuggestion.id))
+        .where(BoSuggestion.bo_run_id == BoRun.id)
+        .correlate(BoRun)
+        .scalar_subquery()
+    )
+
+    rows = db.execute(
+        select(BoRun, n_observations.label("n_obs"), n_suggestions.label("n_sugg")).order_by(
+            BoRun.id.desc()
+        )
+    ).all()
+
     return [
         BoRunOut(
             id=run.id,
@@ -53,10 +75,10 @@ def list_runs(db: Session = Depends(get_db)) -> list[BoRunOut]:
             objective_sense=run.objective_sense,
             status=run.status,
             random_seed=run.random_seed,
-            n_observations=len(run.observations),
-            n_suggestions=len(run.suggestions),
+            n_observations=n_obs,
+            n_suggestions=n_sugg,
         )
-        for run in runs
+        for run, n_obs, n_sugg in rows
     ]
 
 
@@ -179,26 +201,39 @@ def suggest(run_id: int, payload: SuggestRequest, db: Session = Depends(get_db))
     rather than GP suggestions — a GP fitted on three points is reporting its
     prior, and dressing that up as a recommendation wastes real growth runs.
     """
-    run = (
-        db.query(BoRun)
-        .options(selectinload(BoRun.observations))
-        .filter(BoRun.id == run_id)
-        .one_or_none()
-    )
+    run = db.get(BoRun, run_id)
     if run is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"No BO run with id {run_id}.")
 
     space = SearchSpace.from_dict(run.search_space)
     constraints = ConstraintSet.from_dict(run.constraints)
+
+    #  Query the observations directly instead of walking ``run.observations``:
+    #  the unevaluated ones carry no information for the surrogate, and pushing
+    #  that filter into SQL lets the (bo_run_id, is_feasible) index do the work.
+    #  Both feasible and infeasible rows are fetched — ``suggest`` drops the
+    #  infeasible ones itself and reports how many, which is worth saying.
+    observation_rows = db.execute(
+        select(
+            BoObservation.parameters,
+            BoObservation.objective_value,
+            BoObservation.objective_noise,
+            BoObservation.is_feasible,
+        )
+        .where(
+            BoObservation.bo_run_id == run_id,
+            BoObservation.objective_value.isnot(None),
+        )
+        .order_by(BoObservation.id)
+    ).all()
     observations = [
         Observation(
-            parameters=o.parameters,
-            objective=float(o.objective_value),
-            noise=o.objective_noise,
-            is_feasible=o.is_feasible,
+            parameters=parameters,
+            objective=float(objective_value),
+            noise=noise,
+            is_feasible=is_feasible,
         )
-        for o in run.observations
-        if o.objective_value is not None
+        for parameters, objective_value, noise, is_feasible in observation_rows
     ]
 
     try:

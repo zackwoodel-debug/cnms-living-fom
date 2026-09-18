@@ -30,6 +30,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -61,6 +62,35 @@ from .enums import (
 JSONType = JSON().with_variant(JSONB, "postgresql")
 
 
+def enum_column(enum_cls, name: str, length: int = 32) -> SAEnum:
+    """A portable enum column storing the member *value*, not its Python name.
+
+    Two deliberate choices, both of which matter for a platform whose point is
+    auditability:
+
+    ``values_callable``
+        Without it SQLAlchemy stores the member *name*, so the database holds
+        ``'MODELED'`` while the API, the JSON payloads, and the docs all say
+        ``'modeled'``. Anyone writing ``WHERE provenance_tier = 'measured'`` by
+        hand — in psql, DataGrip, or a BI tool — would silently get zero rows.
+        Storing the value keeps one vocabulary everywhere.
+
+    ``native_enum=False``
+        Emits ``VARCHAR + CHECK`` on both Postgres and SQLite rather than a
+        Postgres ``ENUM`` type. The constraint is just as strong, the schema is
+        identical across backends, and adding a member later is an ordinary
+        constraint change instead of ``ALTER TYPE`` — which matters because
+        ``SpecimenForm`` and ``SynthesisTechnique`` will grow as CNMS work does.
+    """
+    return SAEnum(
+        enum_cls,
+        name=name,
+        native_enum=False,
+        values_callable=lambda cls: [member.value for member in cls],
+        length=length,
+    )
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -80,10 +110,16 @@ class Material(Base, TimestampMixin):
 
     __tablename__ = "materials"
     __table_args__ = (
+        #  Eq. (3): identity is composition + polymorph + specimen form, never
+        #  the formula alone.
         UniqueConstraint(
             "formula_reduced", "polymorph", "specimen_form", name="uq_material_identity"
         ),
+        #  Sec. 2.1 at the storage layer: a blank polymorph would reintroduce
+        #  exactly the formula-only identity the uniqueness constraint forbids.
+        CheckConstraint("length(trim(polymorph)) > 0", name="ck_material_polymorph_not_blank"),
         Index("ix_materials_formula", "formula_reduced"),
+        Index("ix_materials_form_polymorph", "specimen_form", "polymorph"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -95,7 +131,7 @@ class Material(Base, TimestampMixin):
     space_group_symbol: Mapped[str | None] = mapped_column(String(32))
     space_group_number: Mapped[int | None] = mapped_column(Integer)
     specimen_form: Mapped[SpecimenForm] = mapped_column(
-        SAEnum(SpecimenForm, name="specimen_form"), nullable=False
+        enum_column(SpecimenForm, "specimen_form"), nullable=False
     )
 
     # Where this record came from (Materials Project id, ICSD collection code,
@@ -125,6 +161,14 @@ class StructureRecord(Base, TimestampMixin):
     """A concrete atomic structure (CIF) that descriptors are computed from."""
 
     __tablename__ = "structures"
+    __table_args__ = (
+        Index("ix_structures_material", "material_id"),
+        CheckConstraint("volume_ang3 IS NULL OR volume_ang3 > 0", name="ck_structure_volume_positive"),
+        CheckConstraint(
+            "formula_units_per_cell IS NULL OR formula_units_per_cell >= 1",
+            name="ck_structure_z_positive",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     material_id: Mapped[int] = mapped_column(
@@ -140,7 +184,7 @@ class StructureRecord(Base, TimestampMixin):
     method: Mapped[str | None] = mapped_column(String(128))       # e.g. "DFT relaxation", "XRD refinement"
     xc_functional: Mapped[str | None] = mapped_column(String(64))  # e.g. "PBEsol"
     provenance_tier: Mapped[ProvenanceTier] = mapped_column(
-        SAEnum(ProvenanceTier, name="provenance_tier"), nullable=False
+        enum_column(ProvenanceTier, "provenance_tier"), nullable=False
     )
     doi: Mapped[str | None] = mapped_column(String(256))
 
@@ -159,6 +203,12 @@ class DescriptorValue(Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("material_id", "descriptor_key", "method", name="uq_descriptor_value"),
         Index("ix_descriptor_key", "descriptor_key"),
+        #  The hot path in eligibility.build_analysis_table: pull every
+        #  descriptor for one material and bucket by key.
+        Index("ix_descriptor_material_key", "material_id", "descriptor_key"),
+        CheckConstraint(
+            "uncertainty IS NULL OR uncertainty >= 0", name="ck_descriptor_uncertainty_nonneg"
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -176,7 +226,7 @@ class DescriptorValue(Base, TimestampMixin):
     method: Mapped[str | None] = mapped_column(String(128))
     xc_functional: Mapped[str | None] = mapped_column(String(64))
     provenance_tier: Mapped[ProvenanceTier] = mapped_column(
-        SAEnum(ProvenanceTier, name="provenance_tier"), nullable=False
+        enum_column(ProvenanceTier, "provenance_tier"), nullable=False
     )
     # For tensor-derived scalars: which reduction rule was declared (Sec. 3.2).
     reduction_rule: Mapped[str | None] = mapped_column(String(64))
@@ -193,7 +243,34 @@ class PropertyValue(Base, TimestampMixin):
     """
 
     __tablename__ = "property_values"
-    __table_args__ = (Index("ix_property_key", "property_key"),)
+    __table_args__ = (
+        #  Sec. 2.1: the same source reporting the same quantity for the same
+        #  material under the same context twice is a duplicate, not two
+        #  measurements.  See db/context.py for what "same context" means and
+        #  why source identity is part of it.
+        UniqueConstraint(
+            "material_id", "property_key", "context_digest", name="uq_property_value_context"
+        ),
+        Index("ix_property_key", "property_key"),
+        #  build_analysis_table's dominant access pattern.
+        Index("ix_property_material_key", "material_id", "property_key"),
+        #  Eligibility filters on tier before anything else.
+        Index("ix_property_key_tier", "property_key", "provenance_tier"),
+        #  Physically impossible values are a data-entry bug, not data.
+        CheckConstraint(
+            "uncertainty IS NULL OR uncertainty >= 0", name="ck_property_uncertainty_nonneg"
+        ),
+        CheckConstraint(
+            "temperature_k IS NULL OR temperature_k > 0", name="ck_property_temperature_positive"
+        ),
+        CheckConstraint(
+            "frequency_hz IS NULL OR frequency_hz >= 0", name="ck_property_frequency_nonneg"
+        ),
+        CheckConstraint(
+            "thickness_nm IS NULL OR thickness_nm > 0", name="ck_property_thickness_positive"
+        ),
+        CheckConstraint("area_cm2 IS NULL OR area_cm2 > 0", name="ck_property_area_positive"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     material_id: Mapped[int] = mapped_column(
@@ -238,8 +315,13 @@ class PropertyValue(Base, TimestampMixin):
     ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     provenance_tier: Mapped[ProvenanceTier] = mapped_column(
-        SAEnum(ProvenanceTier, name="provenance_tier"), nullable=False
+        enum_column(ProvenanceTier, "provenance_tier"), nullable=False
     )
+
+    #  Fingerprint of the context columns above, maintained by db/events.py.
+    #  It exists so the database can enforce "same measurement" as a uniqueness
+    #  constraint; ~20 nullable columns cannot be a composite key.
+    context_digest: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
 
     # Link back to the experiment that produced it, when it is ours.
     experiment_id: Mapped[int | None] = mapped_column(
@@ -266,7 +348,19 @@ class FomDefinition(Base, TimestampMixin):
     """
 
     __tablename__ = "fom_definitions"
-    __table_args__ = (UniqueConstraint("name", "version", name="uq_fom_name_version"),)
+    __table_args__ = (
+        UniqueConstraint("name", "version", name="uq_fom_name_version"),
+        CheckConstraint("version >= 1", name="ck_fom_version_positive"),
+        #  Eq. (26): the floor is a small positive number, not a free parameter.
+        CheckConstraint(
+            "floor_eps > 0 AND floor_eps < 1", name="ck_fom_floor_eps_in_unit_interval"
+        ),
+        #  A definition cannot be approved by nobody (Sec. 6.2: weights are a
+        #  policy choice and need a named owner).
+        CheckConstraint(
+            "NOT approved OR approved_by IS NOT NULL", name="ck_fom_approved_has_approver"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(64), nullable=False)      # "logic", "power", "rf"
@@ -303,6 +397,25 @@ class FomScore(Base, TimestampMixin):
     __tablename__ = "fom_scores"
     __table_args__ = (
         UniqueConstraint("material_id", "fom_definition_id", "run_id", name="uq_fom_score"),
+        #  Sec. 6.2, enforced by the database rather than by convention: a
+        #  not-scored material carries no score, and a scored one is not empty.
+        #  This is the "no manufactured score" rule as a constraint.
+        CheckConstraint(
+            "status <> 'not_scored' OR value IS NULL", name="ck_score_not_scored_has_no_value"
+        ),
+        CheckConstraint(
+            "status <> 'scored' OR value IS NOT NULL", name="ck_score_scored_has_value"
+        ),
+        #  Eq. (29) with z in (0, 1] and weights on a simplex: F cannot be
+        #  negative, and log_value must be the log of value.
+        CheckConstraint("value IS NULL OR value >= 0", name="ck_score_value_nonneg"),
+        #  A modeled input forces ILLUSTRATIVE (Sec. 2.3); the converse would
+        #  mean a score was labelled illustrative for no recorded reason.
+        CheckConstraint(
+            "NOT uses_modeled_inputs OR status = 'illustrative'",
+            name="ck_score_modeled_is_illustrative",
+        ),
+        Index("ix_score_definition_status", "fom_definition_id", "status"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -317,7 +430,7 @@ class FomScore(Base, TimestampMixin):
     value: Mapped[float | None] = mapped_column(Float)
     log_value: Mapped[float | None] = mapped_column(Float)
     status: Mapped[ScoreStatus] = mapped_column(
-        SAEnum(ScoreStatus, name="score_status"), nullable=False
+        enum_column(ScoreStatus, "score_status"), nullable=False
     )
     # Which required inputs were NA.  A non-empty list means status != SCORED.
     missing_inputs: Mapped[list | None] = mapped_column(JSONType)
@@ -339,6 +452,14 @@ class AnalysisRun(Base, TimestampMixin):
     """Provenance envelope for one computation (Sec. 16 reproducibility checklist)."""
 
     __tablename__ = "analysis_runs"
+    __table_args__ = (
+        Index("ix_runs_kind_created", "kind", "created_at"),
+        #  Eq. (42): fewer than 10,000 permutations is allowed only as a
+        #  documented exception, but zero or negative is always a bug.
+        CheckConstraint(
+            "permutation_b IS NULL OR permutation_b > 0", name="ck_run_permutation_positive"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)  # score|correlation|mediation|bo|rag
@@ -362,13 +483,42 @@ class AnalysisRun(Base, TimestampMixin):
     mediations: Mapped[list[MediationResult]] = relationship(
         back_populates="run", cascade="all, delete-orphan"
     )
+    sensitivities: Mapped[list[SensitivityEstimate]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+    integrity_checks: Mapped[list[IntegrityCheck]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
+    exclusions: Mapped[list[AnalysisExclusion]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
 
 
 class CorrelationResult(Base, TimestampMixin):
     """One cell of a correlation block — every field of FOM_PROOF Table 6."""
 
     __tablename__ = "correlation_results"
-    __table_args__ = (Index("ix_corr_run_block", "run_id", "block"),)
+    __table_args__ = (
+        Index("ix_corr_run_block", "run_id", "block"),
+        Index("ix_corr_pair", "x_key", "y_key"),
+        #  Sec. 7.3: a cell always knows its own complete-case count.
+        CheckConstraint("n_complete >= 0", name="ck_corr_n_nonneg"),
+        CheckConstraint(
+            "pearson_r IS NULL OR (pearson_r >= -1 AND pearson_r <= 1)", name="ck_corr_r_range"
+        ),
+        CheckConstraint(
+            "spearman_rho IS NULL OR (spearman_rho >= -1 AND spearman_rho <= 1)",
+            name="ck_corr_rho_range",
+        ),
+        #  Eq. (41) floors p at 1/(B+1), so a zero p-value means a bug.
+        CheckConstraint(
+            "p_permutation IS NULL OR (p_permutation > 0 AND p_permutation <= 1)",
+            name="ck_corr_p_range",
+        ),
+        CheckConstraint(
+            "q_fdr IS NULL OR (q_fdr >= 0 AND q_fdr <= 1)", name="ck_corr_q_range"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(
@@ -376,15 +526,15 @@ class CorrelationResult(Base, TimestampMixin):
     )
 
     block: Mapped[CorrelationBlock] = mapped_column(
-        SAEnum(CorrelationBlock, name="correlation_block"), nullable=False
+        enum_column(CorrelationBlock, "correlation_block"), nullable=False
     )
     x_key: Mapped[str] = mapped_column(String(64), nullable=False)
     y_key: Mapped[str] = mapped_column(String(64), nullable=False)
     x_transform: Mapped[Transform] = mapped_column(
-        SAEnum(Transform, name="transform"), nullable=False, default=Transform.NONE
+        enum_column(Transform, "transform"), nullable=False, default=Transform.NONE
     )
     y_transform: Mapped[Transform] = mapped_column(
-        SAEnum(Transform, name="transform"), nullable=False, default=Transform.NONE
+        enum_column(Transform, "transform"), nullable=False, default=Transform.NONE
     )
 
     pearson_r: Mapped[float | None] = mapped_column(Float)
@@ -397,7 +547,7 @@ class CorrelationResult(Base, TimestampMixin):
     predicted_sign: Mapped[str | None] = mapped_column(String(16))  # "+", "-", "test"
     mechanism: Mapped[str | None] = mapped_column(Text)
     outcome: Mapped[HypothesisOutcome | None] = mapped_column(
-        SAEnum(HypothesisOutcome, name="hypothesis_outcome")
+        enum_column(HypothesisOutcome, "hypothesis_outcome")
     )
     # Exactly which materials entered this cell (Table 6: "eligible material records").
     material_ids: Mapped[list | None] = mapped_column(JSONType)
@@ -409,6 +559,12 @@ class MediationResult(Base, TimestampMixin):
     """M_ja = sum_q B_jq * Gamma_qa  (Eqs. 64-65) — the primary mechanistic result."""
 
     __tablename__ = "mediation_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "descriptor_key", "application", name="uq_mediation_descriptor_application"
+        ),
+        Index("ix_mediation_application", "application"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(
@@ -439,13 +595,17 @@ class Document(Base, TimestampMixin):
     """A source PDF in the synthesis corpus (MBE / PLD / ALD / CNMS user docs)."""
 
     __tablename__ = "documents"
+    __table_args__ = (
+        Index("ix_documents_technique", "technique"),
+        CheckConstraint("n_pages IS NULL OR n_pages > 0", name="ck_document_pages_positive"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(512), nullable=False)
     filename: Mapped[str] = mapped_column(String(512), nullable=False)
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     technique: Mapped[SynthesisTechnique] = mapped_column(
-        SAEnum(SynthesisTechnique, name="synthesis_technique"), nullable=False
+        enum_column(SynthesisTechnique, "synthesis_technique"), nullable=False
     )
     doi: Mapped[str | None] = mapped_column(String(256))
     authors: Mapped[str | None] = mapped_column(Text)
@@ -468,7 +628,10 @@ class DocumentChunk(Base, TimestampMixin):
     """
 
     __tablename__ = "document_chunks"
-    __table_args__ = (UniqueConstraint("document_id", "chunk_index", name="uq_chunk_position"),)
+    __table_args__ = (
+        UniqueConstraint("document_id", "chunk_index", name="uq_chunk_position"),
+        CheckConstraint("chunk_index >= 0", name="ck_chunk_index_nonneg"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     document_id: Mapped[int] = mapped_column(
@@ -497,12 +660,13 @@ class Instrument(Base, TimestampMixin):
     """
 
     __tablename__ = "instruments"
+    __table_args__ = (Index("ix_instruments_technique_available", "technique", "available"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     technique: Mapped[SynthesisTechnique] = mapped_column(
-        SAEnum(SynthesisTechnique, name="synthesis_technique"), nullable=False
+        enum_column(SynthesisTechnique, "synthesis_technique"), nullable=False
     )
     location: Mapped[str | None] = mapped_column(String(128))
     # {parameter: {min, max, units}} — the hard envelope the BO loop must respect.
@@ -516,6 +680,11 @@ class Experiment(Base, TimestampMixin):
     """One growth/characterization run and the recipe that produced it."""
 
     __tablename__ = "experiments"
+    __table_args__ = (
+        Index("ix_experiments_instrument_status", "instrument_id", "status"),
+        Index("ix_experiments_material", "material_id"),
+        Index("ix_experiments_proposal", "proposal_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     external_id: Mapped[str | None] = mapped_column(String(128), unique=True)
@@ -554,6 +723,10 @@ class BoRun(Base, TimestampMixin):
     """A campaign: one objective, one search space, many suggestions."""
 
     __tablename__ = "bo_runs"
+    __table_args__ = (
+        Index("ix_bo_runs_status", "status"),
+        CheckConstraint("objective_sense IN ('max', 'min')", name="ck_bo_run_objective_sense"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -581,6 +754,16 @@ class BoObservation(Base, TimestampMixin):
     """An evaluated point: recipe in, objective out."""
 
     __tablename__ = "bo_observations"
+    __table_args__ = (
+        #  Every suggest() call reads exactly this slice: the feasible
+        #  observations of one run.  Without the composite index it is a full
+        #  scan of the run's history on every proposal.
+        Index("ix_bo_obs_run_feasible", "bo_run_id", "is_feasible"),
+        Index("ix_bo_obs_experiment", "experiment_id"),
+        CheckConstraint(
+            "objective_noise IS NULL OR objective_noise >= 0", name="ck_bo_obs_noise_nonneg"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     bo_run_id: Mapped[int] = mapped_column(ForeignKey("bo_runs.id", ondelete="CASCADE"), index=True)
@@ -604,6 +787,13 @@ class BoSuggestion(Base, TimestampMixin):
     """A proposed next experiment, with the acquisition value that justified it."""
 
     __tablename__ = "bo_suggestions"
+    __table_args__ = (
+        Index("ix_bo_sugg_run_status", "bo_run_id", "status"),
+        CheckConstraint("batch_index >= 0", name="ck_bo_sugg_batch_index_nonneg"),
+        CheckConstraint(
+            "predicted_std IS NULL OR predicted_std >= 0", name="ck_bo_sugg_std_nonneg"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     bo_run_id: Mapped[int] = mapped_column(ForeignKey("bo_runs.id", ondelete="CASCADE"), index=True)
@@ -616,3 +806,293 @@ class BoSuggestion(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(16), default="proposed", nullable=False)
 
     run: Mapped[BoRun] = relationship(back_populates="suggestions")
+
+
+# ---------------------------------------------------------------------------
+# Persisted analysis intermediates
+#
+# Sec. 16 item 11 requires transformations, bounds, and weights to be versioned,
+# and Sec. 11.3 requires the integrity checks to be reproducible.  Computing
+# these in memory and returning them over HTTP satisfies neither: a result you
+# cannot re-read is not auditable.  The three tables below close that gap.
+# ---------------------------------------------------------------------------
+
+
+class SensitivityEstimate(Base, TimestampMixin):
+    """One entry of the structure-to-property matrix B (FOM_PROOF Eq. 47).
+
+    B is the empirical half of the mediated effect, and the half a reviewer will
+    question.  Storing only the finished ``MediationResult`` hides which
+    regression produced each coefficient, at what reference point, and with what
+    collinearity — so the fit diagnostics live here alongside the number.
+    """
+
+    __tablename__ = "sensitivity_estimates"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id", "descriptor_key", "property_key", name="uq_sensitivity_cell"
+        ),
+        Index("ix_sensitivity_run", "run_id"),
+        CheckConstraint(
+            "source IN ('regression', 'theory')", name="ck_sensitivity_source"
+        ),
+        CheckConstraint("vif IS NULL OR vif >= 1", name="ck_sensitivity_vif_at_least_one"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True
+    )
+
+    descriptor_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    property_key: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    #  dP_q / dS_j in natural units (Eq. 47).
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    #  d ln P_q / d ln S_j (Eq. 48) — dimensionless, so cells compare.
+    elasticity: Mapped[float | None] = mapped_column(Float)
+    #  "regression" (estimated from data) or "theory" (Eqs. 50-53 prior).
+    #  They support different claims and must never be silently mixed.
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    std_error: Mapped[float | None] = mapped_column(Float)
+    p_value: Mapped[float | None] = mapped_column(Float)
+    #  Sec. 9.2: a coefficient with a high VIF is not interpretable alone.
+    vif: Mapped[float | None] = mapped_column(Float)
+    n_complete: Mapped[int | None] = mapped_column(Integer)
+    #  Elasticity -> natural-unit conversion is only valid at a stated point.
+    reference_point: Mapped[dict | None] = mapped_column(JSONType)
+    confounders: Mapped[list | None] = mapped_column(JSONType)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    run: Mapped[AnalysisRun] = relationship(back_populates="sensitivities")
+
+
+class IntegrityCheck(Base, TimestampMixin):
+    """Result of the Sec. 11.3 checks for one set of applications.
+
+    Recorded whether it passes or fails.  A stored failure is the point: it is
+    the evidence that a ranking was not released, and re-running until it passes
+    without recording the failures would defeat the check.
+    """
+
+    __tablename__ = "integrity_checks"
+    __table_args__ = (Index("ix_integrity_run", "run_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True
+    )
+
+    applications: Mapped[list] = mapped_column(JSONType, nullable=False)
+    n_materials: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    #  Row-major matrices over ``applications``.
+    observed_correlation: Mapped[list | None] = mapped_column(JSONType)
+    null_correlation: Mapped[list | None] = mapped_column(JSONType)   # Eq. (60)
+    excess_correlation: Mapped[list | None] = mapped_column(JSONType)  # Eq. (61)
+
+    #  Eq. (62): direct vs reconstructed R_FF.
+    reconstruction_ok: Mapped[bool | None] = mapped_column(Boolean)
+    max_reconstruction_error: Mapped[float | None] = mapped_column(Float)
+
+    #  Eq. (63): leakage report, including per-application residual sd.
+    leakage_passed: Mapped[bool | None] = mapped_column(Boolean)
+    leakage_report: Mapped[dict | None] = mapped_column(JSONType)
+
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    failures: Mapped[list | None] = mapped_column(JSONType)
+
+    run: Mapped[AnalysisRun] = relationship(back_populates="integrity_checks")
+
+
+class AnalysisExclusion(Base, TimestampMixin):
+    """Why one value did not enter an analysis table (FOM_PROOF Sec. 2.3).
+
+    The protocol's headline rule is that missing data stays missing.  The
+    corollary is that *why* a value is missing has to be recoverable: "excluded"
+    and "never existed" are different findings, and only one of them is fixed by
+    going back to the literature.  ``eligibility.build_analysis_table`` already
+    produces these reasons; this table keeps them.
+    """
+
+    __tablename__ = "analysis_exclusions"
+    __table_args__ = (
+        Index("ix_exclusion_run_key", "run_id", "property_key"),
+        Index("ix_exclusion_material", "material_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("analysis_runs.id", ondelete="CASCADE"), index=True
+    )
+
+    #  "HfO2|monoclinic|crystalline_film" — the Eq. (3) identity as text, so the
+    #  audit trail survives a material being deleted.
+    material_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    material_id: Mapped[int | None] = mapped_column(
+        ForeignKey("materials.id", ondelete="SET NULL")
+    )
+    property_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+    run: Mapped[AnalysisRun] = relationship(back_populates="exclusions")
+
+
+# ---------------------------------------------------------------------------
+# Spectra
+#
+# omega_TO,min and S_osc (Table 2) are *derived from* an IR spectrum, and
+# optical n(lambda) / k(lambda) is the most common form in which external
+# databases publish dielectric information.  Without somewhere to put a curve,
+# every such dataset arrives pre-reduced to a scalar by someone else, under an
+# aggregation rule nobody recorded — exactly what Sec. 3.2 prohibits.
+#
+# Split into series + points so the measurement context is stored once per
+# curve rather than once per point: the CNMS oxide import is ~300 series and
+# ~125,000 points.
+# ---------------------------------------------------------------------------
+
+
+class SpectralSeries(Base, TimestampMixin):
+    """One measured or computed curve for one material, with its context."""
+
+    __tablename__ = "spectral_series"
+    __table_args__ = (
+        UniqueConstraint(
+            "material_id", "quantity", "axis", "context_digest", name="uq_spectral_series"
+        ),
+        Index("ix_spectral_series_material_quantity", "material_id", "quantity"),
+        CheckConstraint(
+            "independent_variable IN ('wavelength_nm', 'energy_ev', 'frequency_hz', 'wavenumber_cm-1')",
+            name="ck_spectral_independent_variable",
+        ),
+        CheckConstraint("n_points >= 0", name="ck_spectral_n_points_nonneg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    material_id: Mapped[int] = mapped_column(
+        ForeignKey("materials.id", ondelete="CASCADE"), index=True
+    )
+
+    #  "n", "k", "eps_real", "eps_imag", "reflectance", "absorption_coefficient"
+    quantity: Mapped[str] = mapped_column(String(32), nullable=False)
+    units: Mapped[str | None] = mapped_column(String(32))
+    independent_variable: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    #  Crystallographic/optical axis: "o-ray", "e-ray", "alpha", "beta", "gamma",
+    #  "isotropic".  Sec. 3.2 — a curve without its axis cannot be reduced to a
+    #  directional scalar later.
+    axis: Mapped[str | None] = mapped_column(String(32))
+    tensor_component: Mapped[str | None] = mapped_column(String(16))
+
+    temperature_k: Mapped[float | None] = mapped_column(Float)
+    method: Mapped[str | None] = mapped_column(String(128))
+    provenance_tier: Mapped[ProvenanceTier] = mapped_column(
+        enum_column(ProvenanceTier, "provenance_tier"), nullable=False
+    )
+    doi: Mapped[str | None] = mapped_column(String(256))
+    source_url: Mapped[str | None] = mapped_column(String(512))
+    database_identifier: Mapped[str | None] = mapped_column(String(128))
+    dataset_label: Mapped[str | None] = mapped_column(String(256))
+    context_digest: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    n_points: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    x_min: Mapped[float | None] = mapped_column(Float)
+    x_max: Mapped[float | None] = mapped_column(Float)
+
+    points: Mapped[list[SpectralPoint]] = relationship(
+        back_populates="series", cascade="all, delete-orphan"
+    )
+
+
+class SpectralPoint(Base):
+    """One (x, y) sample of a :class:`SpectralSeries`.
+
+    No timestamp mixin and no provenance columns: both belong to the series, and
+    duplicating them across ~10^5 rows would cost more than the data.
+    """
+
+    __tablename__ = "spectral_points"
+    __table_args__ = (
+        UniqueConstraint("series_id", "x_value", name="uq_spectral_point_x"),
+        Index("ix_spectral_point_series_x", "series_id", "x_value"),
+        #  A zero or negative wavelength/energy is not a data point.
+        CheckConstraint("x_value > 0", name="ck_spectral_point_x_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    series_id: Mapped[int] = mapped_column(
+        ForeignKey("spectral_series.id", ondelete="CASCADE"), index=True
+    )
+    x_value: Mapped[float] = mapped_column(Float, nullable=False)
+    y_value: Mapped[float] = mapped_column(Float, nullable=False)
+    uncertainty: Mapped[float | None] = mapped_column(Float)
+
+    series: Mapped[SpectralSeries] = relationship(back_populates="points")
+
+
+# ---------------------------------------------------------------------------
+# External ingestion staging
+# ---------------------------------------------------------------------------
+
+
+class ExternalRecord(Base, TimestampMixin):
+    """A row from an external database, kept verbatim before promotion.
+
+    Ingestion is two-phase on purpose.  External sources routinely lack the
+    identity and context this protocol requires — the CNMS oxide database, for
+    instance, has no polymorph column at all, and encodes phase and optical axis
+    inside a free-text ``dataset_label``.  A single-phase importer has only two
+    options at that point: invent the missing fields, or drop the row silently.
+    Sec. 2.3 forbids the first and auditability forbids the second.
+
+    So everything lands here with its raw payload, and only rows that pass
+    eligibility are promoted into ``materials`` / ``property_values``.  The rest
+    stay quarantined with a reason, which turns "this database is not usable
+    yet" into a queryable list of exactly what is missing.
+    """
+
+    __tablename__ = "external_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_database", "source_table", "source_row_id", name="uq_external_record"
+        ),
+        Index("ix_external_status", "source_database", "status"),
+        CheckConstraint(
+            "status IN ('staged', 'promoted', 'quarantined', 'superseded')",
+            name="ck_external_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    #  Provenance of the *import*, distinct from the provenance of the value.
+    source_database: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_table: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_row_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_sha256: Mapped[str | None] = mapped_column(String(64))
+
+    #  The original row, unmodified.  Re-parsing beats re-importing when the
+    #  mapping improves, and it is the only defence against a lossy mapping.
+    payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    #  What the label parser recovered: phase, axis, source tag, quantity.
+    parsed: Mapped[dict | None] = mapped_column(JSONType)
+
+    status: Mapped[str] = mapped_column(String(16), default="staged", nullable=False)
+    quarantine_reason: Mapped[str | None] = mapped_column(Text)
+    #  Which required fields were absent — the shopping list for making this
+    #  record usable.
+    missing_fields: Mapped[list | None] = mapped_column(JSONType)
+
+    material_id: Mapped[int | None] = mapped_column(
+        ForeignKey("materials.id", ondelete="SET NULL")
+    )
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+#  Registered last, once every mapped class above exists.  Importing ``models``
+#  must be enough to get the invariants — a caller should not have to remember
+#  to import ``events`` as well.  Kept out of ``db/__init__.py`` on purpose so
+#  that ``from cnms_fom.db.enums import ...`` still works without SQLAlchemy.
+from . import events  # noqa: E402,F401  (side-effecting import, must come last)

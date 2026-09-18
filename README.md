@@ -78,7 +78,7 @@ pip install -e ".[dev]"                 # FOM engine + API, no heavy extras
 pip install -e ".[all]"                 # everything: pymatgen, torch, langchain
 
 export DATABASE_URL=postgresql+psycopg2://cnms:cnms@localhost:5432/cnms_fom
-cnms-fom init-db && cnms-fom seed
+cnms-fom init-db && cnms-fom seed      # init-db runs Alembic migrations
 cnms-fom serve --reload
 
 cd frontend && npm install && npm run dev
@@ -88,8 +88,46 @@ Tests need nothing beyond the base install — no database, no network, no model
 server:
 
 ```bash
-pytest                                  # 101 tests
+pytest                                  # 156 tests
 ```
+
+### Migrations
+
+The schema carries CHECK constraints, a backfilled context digest, and an
+enum-storage convention that `create_all` cannot apply to a database that
+already has rows, so schema changes go through Alembic.
+
+```bash
+cnms-fom init-db                    # fresh database → head
+cnms-fom init-db --stamp-baseline   # database created before Alembic existed
+cnms-fom migrate current            # what revision is this database at?
+cnms-fom migrate up | down
+```
+
+### Importing an external materials database
+
+Two-phase by design: everything is staged verbatim, and only rows carrying a
+phase, a specimen form, and the context their property requires are promoted.
+The default mode writes nothing.
+
+```bash
+# What is in it, and what would stop it being used?
+python scripts/ingest_materials_db.py survey path/to/materials_oxide_test.db
+
+python scripts/ingest_materials_db.py stage  path/to/materials_oxide_test.db
+python scripts/ingest_materials_db.py promote path/to/materials_oxide_test.db \
+    --specimen-form bulk_single_crystal --operator "Your Name"
+
+# eps_inf = n² − k² from a transparent window (feeds Eq. 11)
+python scripts/ingest_materials_db.py derive-eps-inf --window 1000 2000
+```
+
+`--specimen-form` is required and is recorded on every material it creates: the
+external source does not record it, and asserting it is a human judgement that
+belongs on the record rather than in the importer.
+
+See `docs/DB_PROTOCOL.md` for the full mapping, the constraint table, and what a
+survey of the CNMS oxide database actually found.
 
 ---
 
@@ -102,11 +140,13 @@ backend/cnms_fom/
   rag_backend/        retrieval over MBE/PLD/ALD/CNMS docs, local via Ollama
   bo_engine/          BoTorch loop over growth recipes
   cnms_integration/   instruments, experiments, run provenance  [placeholders]
-  db/                 SQLAlchemy models with full provenance columns
+  db/                 SQLAlchemy models, constraints, context identity
+  ingest/             external materials-DB import (label parsing, staging)
   routers/            /materials  /fom  /rag  /bo  /health
+migrations/           Alembic revisions
 frontend/             React + Vite + TypeScript
-docs/                 FOM_PROTOCOL.md (equation → code), ARCHITECTURE.md
-scripts/              example loader, Sec. 16 compliance checker
+docs/                 FOM_PROTOCOL.md · DB_PROTOCOL.md · ARCHITECTURE.md
+scripts/              example loader, external ingester, compliance checker
 ```
 
 ### The FOM engine
@@ -173,9 +213,15 @@ Every `TODO(FOM_PROOF)` and `TODO(CNMS)` in the source marks one of these. To
 check where you stand:
 
 ```bash
-python scripts/check_protocol_compliance.py
+python scripts/check_protocol_compliance.py   # includes DB-level checks
 grep -rn "TODO(CNMS)\|TODO(FOM_PROOF)" backend/
 ```
+
+The protocol's rules are also enforced in storage, so they hold for ingestion
+scripts and hand-written SQL, not just for the API: a `not_scored` row cannot
+carry a number, a modeled input cannot become a measurement-based score, a
+frozen FOM definition cannot be edited, and the same measurement cannot be
+stored twice. `docs/DB_PROTOCOL.md` has the full table.
 
 `scripts/load_example_data.py` will populate the database for a demo. Every value
 it writes is tagged `modeled`, so every score built on it returns status

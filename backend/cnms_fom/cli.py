@@ -8,26 +8,77 @@ import sys
 from pathlib import Path
 
 
-def _init_db(args: argparse.Namespace) -> int:
+def _alembic_config():
+    """Alembic config rooted at the repository, wired to the live DATABASE_URL."""
+    from alembic.config import Config
+
+    from cnms_fom.config import get_settings
+
+    root = Path(__file__).resolve().parents[2]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    config.set_main_option("sqlalchemy.url", get_settings().database_url)
+    return config
+
+
+def _enable_pgvector() -> None:
     from sqlalchemy import text
 
     from cnms_fom.config import get_settings
+    from cnms_fom.db.base import get_engine
+
+    if not get_settings().pgvector_enabled:
+        return
+    try:
+        with get_engine().begin() as connection:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        print("pgvector extension present")
+    except Exception as exc:  # noqa: BLE001 - SQLite and unprivileged roles both land here
+        print(f"Could not enable pgvector ({exc}); embeddings fall back to a JSON column.")
+
+
+def _init_db(args: argparse.Namespace) -> int:
+    """Bring the database to the current schema via Alembic.
+
+    Alembic rather than ``metadata.create_all``: the schema now carries CHECK
+    constraints, a backfilled context digest, and an enum-storage change, none
+    of which ``create_all`` can apply to a database that already has rows. Going
+    through migrations means the same command works on an empty database and on
+    a populated one.
+    """
+    from alembic import command
+
+    _enable_pgvector()
+    config = _alembic_config()
+    if args.stamp_baseline:
+        #  For a database created by the old create_all path, before Alembic
+        #  existed: tell Alembic it is already at the baseline, then upgrade.
+        command.stamp(config, "0001")
+        print("stamped at baseline revision 0001")
+    command.upgrade(config, "head")
+
     from cnms_fom.db import models  # noqa: F401 - registers the mappers
-    from cnms_fom.db.base import Base, get_engine
+    from cnms_fom.db.base import Base
 
-    engine = get_engine()
-    if get_settings().pgvector_enabled:
-        try:
-            with engine.begin() as connection:
-                connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            print("pgvector extension present")
-        except Exception as exc:  # noqa: BLE001
-            print(f"Could not enable pgvector ({exc}); falling back to JSON embeddings.")
-
-    Base.metadata.create_all(engine)
-    print(f"Created {len(Base.metadata.tables)} tables:")
+    print(f"Database at head. {len(Base.metadata.tables)} tables:")
     for name in sorted(Base.metadata.tables):
         print(f"  {name}")
+    return 0
+
+
+def _migrate(args: argparse.Namespace) -> int:
+    """Thin wrapper over the Alembic commands people actually need."""
+    from alembic import command
+
+    config = _alembic_config()
+    if args.action == "up":
+        command.upgrade(config, args.revision or "head")
+    elif args.action == "down":
+        command.downgrade(config, args.revision or "-1")
+    elif args.action == "current":
+        command.current(config, verbose=True)
+    elif args.action == "history":
+        command.history(config, verbose=False)
     return 0
 
 
@@ -124,9 +175,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cnms-fom", description="CNMS Living FOM platform.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("init-db", help="Create tables (and the pgvector extension).").set_defaults(
-        func=_init_db
+    init_db = subparsers.add_parser(
+        "init-db", help="Bring the database to the current schema (runs migrations)."
     )
+    init_db.add_argument(
+        "--stamp-baseline",
+        action="store_true",
+        help="For a database created before Alembic existed: stamp it at revision 0001 first.",
+    )
+    init_db.set_defaults(func=_init_db)
+
+    migrate = subparsers.add_parser("migrate", help="Run Alembic migrations.")
+    migrate.add_argument("action", choices=["up", "down", "current", "history"])
+    migrate.add_argument("revision", nargs="?", help="Target revision (default: head / -1).")
+    migrate.set_defaults(func=_migrate)
     subparsers.add_parser(
         "seed", help="Insert draft FOM definitions and placeholder instruments."
     ).set_defaults(func=_seed)
