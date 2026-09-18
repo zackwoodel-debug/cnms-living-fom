@@ -88,8 +88,33 @@ Tests need nothing beyond the base install — no database, no network, no model
 server:
 
 ```bash
-pytest                                  # 156 tests
+pytest                                  # 195 tests
 ```
+
+### The pilot loop
+
+One complete experimental cycle for HfO₂ on Si, meant as the template a real
+CNMS study is cut from:
+
+```bash
+cnms-fom init-db && cnms-fom seed
+cnms-fom serve --reload
+
+curl -sX POST localhost:8000/pilot/hfo2_logic_run -H 'content-type: application/json' \
+     -d '{"random_seed": 20260823}'
+curl -sX POST localhost:8000/pilot/hfo2_logic_run/1/iterate -H 'content-type: application/json' \
+     -d '{"q": 2, "persist": true, "seed": 1}'
+```
+
+`iterate` suggests recipes, exports the layer stack, simulates X-ray
+reflectivity, derives properties, scores the FOM, and logs the observations so
+the surrogate retrains. `ingest_experiment` is the identical pipeline with the
+simulation replaced by real measurements — which is the only change needed to go
+from pilot to production.
+
+Simulated properties are stored `modeled`, so every score from `iterate` comes
+back `illustrative`. Measured ones score normally. See `docs/PILOT_WORKFLOW.md`
+for the physics, what is real versus heuristic, and the CI pipeline.
 
 ### Migrations
 
@@ -142,11 +167,13 @@ backend/cnms_fom/
   cnms_integration/   instruments, experiments, run provenance  [placeholders]
   db/                 SQLAlchemy models, constraints, context identity
   ingest/             external materials-DB import (label parsing, staging)
-  routers/            /materials  /fom  /rag  /bo  /health
+  pilot/              HfO2-on-Si loop: stack export, XRR, property model
+  routers/            /materials  /fom  /rag  /bo  /pilot  /health
 migrations/           Alembic revisions
 frontend/             React + Vite + TypeScript
-docs/                 FOM_PROTOCOL.md · DB_PROTOCOL.md · ARCHITECTURE.md
+docs/                 FOM_PROTOCOL.md · DB_PROTOCOL.md · PILOT_WORKFLOW.md · ARCHITECTURE.md
 scripts/              example loader, external ingester, compliance checker
+.github/workflows/    CI: science on SQLite, migrations on Postgres, pilot loop
 ```
 
 ### The FOM engine
@@ -184,6 +211,9 @@ makes the protocol testable without a database or a network.
 | `GET` | `/fom/hypotheses` | Pre-registered signs and their fingerprint |
 | `POST` | `/rag/query` | Synthesis Q&A with page-level citations |
 | `POST` | `/bo/run` · `/bo/run/{id}/suggest` | Campaign, then next recipes |
+| `POST` | `/pilot/hfo2_logic_run` | Create the worked HfO₂-on-Si campaign |
+| `POST` | `/pilot/hfo2_logic_run/{id}/iterate` | Suggest → simulate → score → observe |
+| `POST` | `/pilot/hfo2_logic_run/{id}/ingest_experiment` | The same, with measured data |
 
 ---
 

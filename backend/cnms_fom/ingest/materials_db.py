@@ -428,11 +428,24 @@ def promote(
 
         source = payload.get("_source") or {}
         wrote = False
-        for column, (key, kind, units) in PHYSICAL_COLUMN_MAP.items():
+        for column, (default_key, kind, units) in PHYSICAL_COLUMN_MAP.items():
             value = payload.get(column)
             if value is None:
                 continue
             method = parsed.get("method") or payload.get("dataset_label") or "external import"
+
+            #  One column carries two quantities. ``xray_sld`` holds the real
+            #  part in a row labelled ``xray_sld_real`` and the imaginary part
+            #  in one labelled ``xray_sld_imag`` — same column, different
+            #  physics. Trusting the column alone stores an absorption
+            #  coefficient as if it were a scattering length density, which is
+            #  wrong by a factor of ~40 for silicon and silently breaks any
+            #  reflectivity calculation built on it. The label is the only thing
+            #  that distinguishes them, so it wins where it is explicit.
+            key = default_key
+            labelled = parsed.get("quantity")
+            if labelled and labelled.startswith(default_key):
+                key = labelled
 
             if kind == "descriptor":
                 session.add(

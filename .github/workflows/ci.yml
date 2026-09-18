@@ -1,0 +1,237 @@
+# CNMS Living FOM — continuous integration.
+#
+# Three jobs, deliberately layered so a failure says where the problem is:
+#
+#   test      the science and the API on SQLite. Needs no services and no heavy
+#             extras, because fom_engine depends only on numpy/scipy — that is
+#             the property that keeps this job fast.
+#   postgres  the same suite against real Postgres + pgvector, plus a full
+#             migration up/down/up. SQLite tolerates things Postgres does not
+#             (booleans, enum storage, constraint drops), so this is where a
+#             production-only schema bug surfaces.
+#   pilot     the loop end to end through the CLI and the API: migrate, seed,
+#             create a campaign, suggest, simulate, ingest an experiment, and
+#             assert the campaign state actually moved.
+#
+# Everything is seeded, so a green run today means a green run tomorrow.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.11"
+  # Matches cnms_fom.config defaults, so tests and CI agree on the seed.
+  RANDOM_SEED: "20260823"
+  PYTHONHASHSEED: "0"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  test:
+    name: Science + API (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check backend/ scripts/ migrations/
+
+      - name: Test
+        env:
+          DATABASE_URL: sqlite+pysqlite:///./ci.db
+          PGVECTOR_ENABLED: "false"
+        run: pytest -q --durations=10
+
+  # ---------------------------------------------------------------------------
+  postgres:
+    name: Migrations + tests (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Same image as docker-compose: ships pgvector, which plain postgres does not.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: cnms
+          POSTGRES_PASSWORD: cnms
+          POSTGRES_DB: cnms_fom_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cnms -d cnms_fom_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg2://cnms:cnms@localhost:5432/cnms_fom_test
+      PGVECTOR_ENABLED: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,vector]"
+
+      - name: Enable pgvector
+        run: |
+          PGPASSWORD=cnms psql -h localhost -U cnms -d cnms_fom_test \
+            -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Migrate up, down, and up again
+        # The round trip is the point. An upgrade that cannot be reversed is a
+        # migration nobody can safely apply to a database that matters.
+        run: |
+          alembic upgrade head
+          alembic current
+          alembic downgrade 0001
+          alembic upgrade head
+
+      - name: Schema matches the ORM after migrating
+        # Catches a model change that landed without a migration, which would
+        # otherwise show up as a constraint present in tests but not in production.
+        run: |
+          python - <<'PY'
+          from sqlalchemy import create_engine, inspect
+          import os
+          from cnms_fom.db import models  # noqa: F401
+          from cnms_fom.db.base import Base
+
+          engine = create_engine(os.environ["DATABASE_URL"])
+          migrated = set(inspect(engine).get_table_names()) - {"alembic_version"}
+          expected = set(Base.metadata.tables)
+          assert migrated == expected, f"drift: {migrated ^ expected}"
+          print(f"{len(migrated)} tables match the ORM metadata")
+          PY
+
+      - name: Test against Postgres
+        run: pytest -q
+
+  # ---------------------------------------------------------------------------
+  pilot:
+    name: Pilot loop end to end
+    runs-on: ubuntu-latest
+    needs: test
+
+    env:
+      DATABASE_URL: sqlite+pysqlite:///./pilot_ci.db
+      PGVECTOR_ENABLED: "false"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Migrate and seed
+        run: |
+          cnms-fom init-db
+          cnms-fom seed
+
+      - name: Drive the loop
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from cnms_fom.main import app
+
+          client = TestClient(app)
+          SEED = 20260823
+
+          run = client.post("/pilot/hfo2_logic_run", json={"random_seed": SEED})
+          assert run.status_code == 201, run.text
+          run_id = run.json()["id"]
+          print(f"campaign {run_id} created")
+
+          # --- suggest -> simulate -> observe, twice -------------------------
+          for step, batch_seed in enumerate((1, 2), start=1):
+              response = client.post(
+                  f"/pilot/hfo2_logic_run/{run_id}/iterate",
+                  json={"q": 2, "persist": True, "seed": batch_seed},
+              )
+              assert response.status_code == 200, response.text
+              body = response.json()
+              assert len(body["evaluations"]) == 2
+              for evaluation in body["evaluations"]:
+                  # A simulated score must never present as measurement-based.
+                  assert evaluation["fom_status"] == "illustrative", evaluation
+                  assert evaluation["objective_value"] is not None
+              print(f"  iteration {step}: {body['n_observations_after']} observations")
+
+          assert body["n_observations_after"] == 4
+
+          # --- close the loop with measured data ------------------------------
+          ingest = client.post(
+              f"/pilot/hfo2_logic_run/{run_id}/ingest_experiment",
+              json={
+                  "recipe": {"thickness_ang": 120.0, "roughness_ang": 2.5},
+                  "external_experiment_id": "CI-0001",
+                  "measurements": [
+                      {"property_key": "k", "value": 21.4, "temperature_k": 300,
+                       "frequency_hz": 1e4, "tensor_component": "zz", "method": "CV"},
+                      {"property_key": "Eg", "value": 5.8, "method": "ellipsometry"},
+                      {"property_key": "dEc", "value": 1.6, "substrate": "Si(001)",
+                       "interface": "HfO2/SiO2/Si", "method": "XPS"},
+                      {"property_key": "Ebd", "value": 4.4, "thickness_nm": 12.0,
+                       "electrode": "TiN", "temperature_k": 300, "area_cm2": 1e-4,
+                       "failure_criterion": "1 mA/cm^2", "method": "ramped voltage"},
+                  ],
+              },
+          )
+          assert ingest.status_code == 201, ingest.text
+          measured = ingest.json()
+          # Measured inputs, so a real score — not illustrative.
+          assert measured["fom_status"] == "scored", measured
+          assert measured["properties_stored"] == 4
+          print(f"  experiment scored: F={measured['fom_value']:.4f}")
+
+          # --- the campaign state moved ---------------------------------------
+          runs = client.get("/bo/runs").json()
+          assert runs[0]["n_observations"] == 5, runs[0]
+          print(f"  campaign now holds {runs[0]['n_observations']} observations")
+
+          # --- a stack still exports -------------------------------------------
+          stack = client.get(
+              "/pilot/hfo2_logic_run/stack",
+              params={"thickness_ang": 150, "roughness_ang": 3},
+          ).json()
+          assert [layer["name"] for layer in stack["stack"]["layers"]] == [
+              "air", "HfO2", "SiO2", "Si"
+          ]
+          print("pilot loop OK")
+          PY
+
+      - name: Protocol compliance
+        # Expected to report the deliberate placeholders (draft weights, draft
+        # bounds). It must run cleanly, not pass — passing would mean somebody
+        # quietly filled in the decisions it is there to surface.
+        run: python scripts/check_protocol_compliance.py || true

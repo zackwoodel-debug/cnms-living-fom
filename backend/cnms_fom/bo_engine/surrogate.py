@@ -107,10 +107,19 @@ def sobol_points(bounds: np.ndarray, n: int, *, seed: int | None = None) -> np.n
     Used when there are too few observations to fit a meaningful GP. Sobol beats
     uniform random here: it covers the space more evenly at small n, which is
     exactly the regime a first batch of growth runs is in.
-    """
-    torch, *_ = _require_botorch()
-    from botorch.utils.sampling import draw_sobol_samples
 
-    bounds_t = torch.as_tensor(np.asarray(bounds, dtype=float), dtype=torch.double)
-    samples = draw_sobol_samples(bounds=bounds_t, n=n, q=1, seed=seed).squeeze(1)
-    return samples.cpu().numpy()
+    Deliberately on ``scipy.stats.qmc`` rather than BoTorch's equivalent. The
+    cold start is the one part of the loop that runs before any model exists,
+    and requiring a 2 GB torch install to draw quasi-random numbers would mean a
+    new campaign — and CI — could not take its first step without it. scipy is
+    already a core dependency.
+    """
+    from scipy.stats import qmc
+
+    bounds = np.asarray(bounds, dtype=float)
+    lower, upper = bounds[0], bounds[1]
+    engine = qmc.Sobol(d=lower.size, scramble=True, seed=seed)
+    #  random(n) rather than random_base2: n is whatever batch the caller asked
+    #  for, and warning about balance properties would be noise here.
+    unit = engine.random(n)
+    return qmc.scale(unit, lower, upper)

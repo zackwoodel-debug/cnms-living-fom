@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cnms_fom import __version__
 from cnms_fom.config import get_settings
-from cnms_fom.routers import bo, fom, health, materials, rag
+from cnms_fom.routers import bo, fom, health, materials, pilot, rag
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,7 @@ app = FastAPI(
         {"name": "fom", "description": "Scores, correlations, mediated effects, integrity checks."},
         {"name": "rag", "description": "Retrieval over the synthesis corpus, via local Ollama."},
         {"name": "bo", "description": "Bayesian optimization over growth recipes."},
+        {"name": "pilot", "description": "The HfO2-on-Si worked example, end to end."},
     ],
 )
 
@@ -94,6 +95,7 @@ app.include_router(materials.router)
 app.include_router(fom.router)
 app.include_router(rag.router)
 app.include_router(bo.router)
+app.include_router(pilot.router)
 
 
 @app.get("/", tags=["health"])
