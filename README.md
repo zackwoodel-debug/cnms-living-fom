@@ -43,6 +43,17 @@ Concretely:
   answer into `property_values`; the guard raises if one is attempted. A language
   model is an extremely efficient source of plausible numbers, which is precisely
   what Sec. 15.2 prohibits.
+- **The research assistant cannot answer without evidence.** An answer produced
+  without a single retrieval is discarded and replaced with an explicit data gap
+  before it is returned. That is enforced in the loop, not requested in the prompt.
+- **Two techniques measuring one quantity are two measurements.** A ModalFit
+  co-refinement is stored as a measurement record, and where XRR and SE determine
+  the same thickness, both determinations are kept and the disagreement is
+  reported. Nothing averages them. (Sec. 2.1)
+- **A fitted parameter that was held fixed is not a measurement.** Promotion of a
+  ModalFit value into the analysis tables refuses a fixed parameter, one clamped on
+  its fit bound, a fit with no chi-squared, and a technique that never constrained
+  the quantity.
 
 `docs/FOM_PROTOCOL.md` maps every section and equation of the paper to the code
 that implements it.
@@ -88,7 +99,7 @@ Tests need nothing beyond the base install — no database, no network, no model
 server:
 
 ```bash
-pytest                                  # 195 tests
+pytest                                  # 324 tests
 ```
 
 ### The pilot loop
@@ -162,16 +173,18 @@ survey of the CNMS oxide database actually found.
 backend/cnms_fom/
   descriptors/        S from structures (pymatgen + matminer); tensor reduction
   fom_engine/         the protocol, made executable — see below
-  rag_backend/        retrieval over MBE/PLD/ALD/CNMS docs, local via Ollama
+  rag_backend/        hybrid retrieval + the research assistant; local via Ollama
+  modalfit/           ModalFit co-refinements as measurement records
   bo_engine/          BoTorch loop over growth recipes
   cnms_integration/   instruments, experiments, run provenance  [placeholders]
   db/                 SQLAlchemy models, constraints, context identity
   ingest/             external materials-DB import (label parsing, staging)
   pilot/              HfO2-on-Si loop: stack export, XRR, property model
-  routers/            /materials  /fom  /rag  /bo  /pilot  /health
+  routers/            /materials  /fom  /rag  /modalfit  /bo  /pilot  /health
 migrations/           Alembic revisions
 frontend/             React + Vite + TypeScript
-docs/                 FOM_PROTOCOL.md · DB_PROTOCOL.md · PILOT_WORKFLOW.md · ARCHITECTURE.md
+docs/                 FOM_PROTOCOL.md · DB_PROTOCOL.md · PILOT_WORKFLOW.md
+                      RESEARCH_ASSISTANT.md · MODALFIT_INTEGRATION.md · ARCHITECTURE.md
 scripts/              example loader, external ingester, compliance checker
 .github/workflows/    CI: science on SQLite, migrations on Postgres, pilot loop
 ```
@@ -210,6 +223,12 @@ makes the protocol testable without a database or a network.
 | `POST` | `/fom/integrity` | Observed vs. weight-overlap-implied correlation |
 | `GET` | `/fom/hypotheses` | Pre-registered signs and their fingerprint |
 | `POST` | `/rag/query` | Synthesis Q&A with page-level citations |
+| `POST` | `/rag/search` | Retrieval only, with per-retriever diagnostics |
+| `POST` | `/rag/chat` | The research assistant: multi-step, with its evidence trail |
+| `GET` | `/rag/sessions/{key}` | A conversation transcript and the evidence behind it |
+| `POST` | `/modalfit/import` | Import a ModalFit export as a measurement record |
+| `POST` | `/modalfit/compare` | One parameter across every technique that determined it |
+| `POST` | `/modalfit/fits/{id}/promote` | Fitted values → `property_values`, gated |
 | `POST` | `/bo/run` · `/bo/run/{id}/suggest` | Campaign, then next recipes |
 | `POST` | `/pilot/hfo2_logic_run` | Create the worked HfO₂-on-Si campaign |
 | `POST` | `/pilot/hfo2_logic_run/{id}/iterate` | Suggest → simulate → score → observe |
@@ -217,10 +236,72 @@ makes the protocol testable without a database or a network.
 
 ---
 
+## The research assistant
+
+Retrieval over two kinds of evidence: the document corpus, and the platform's own
+records — ModalFit co-refinements, property values, FOM scores.
+
+```bash
+cnms-fom ingest data/pdfs --technique ald
+cnms-fom import-fits data/fits --technique XRR
+
+cnms-fom ask "XRR and SE disagree on the HfO2 thickness for PILOT-07. \
+What does the literature say causes that in a high-k oxide on Si?" \
+  --sample-id HFO2-PILOT-07 --technique ald
+```
+
+Retrieval is hybrid — dense embeddings for paraphrase, Postgres full-text for the
+rare exact tokens a synthesis corpus is mostly made of (`TMA`, `Nevot-Croce`,
+`HfO2`) — fused by reciprocal rank, then graded for whether each passage actually
+answers the question rather than merely sharing its vocabulary. If too little
+survives, the query is rewritten once and retried; if it still fails, the answer is
+`[DATA GAP: explicitly unresolved]`, which is a correct answer here.
+
+The assistant chooses and chains its own retrievals through nine read-only tools.
+Every tool call and its full result are returned and persisted, so "where did that
+number come from?" is answerable six months later. Structured records never come
+back through similarity search: an embedding of `103.4` sits close to one of
+`130.4`, and a number is exactly what a model reports without hedging.
+
+Local by default — `RAG_LLM_PROVIDER=ollama` keeps every excerpt on the machine,
+because the corpus is unpublished CNMS work. `anthropic` is available and opt-in;
+the trade-off is stated at the switch, logged at WARNING, and reported by
+`/health/ready`.
+
+→ `docs/RESEARCH_ASSISTANT.md`
+
+## ModalFit co-refinements
+
+[ModalFit](https://github.com/agauer/modalfit) fits one shared slab model against
+SE, SPR, QCM, XRR, and NR at once. That makes it the only place this platform
+measures the same quantity twice by independent physics — an XRR thickness and an
+SE thickness share no forward model, no instrument, and no systematic error.
+
+```bash
+cnms-fom import-fits data/fits/hfo2_xrr_fitted.json --technique XRR
+cnms-fom compare-fits HFO2-PILOT-07 --parameter thickness
+```
+
+Imports target the documented **exported JSON**, not the Flask API, and are
+idempotent by content hash. The length unit is an argument and never a guess:
+ModalFit's physics backends use angstroms, its bundled substrate library is written
+in nanometres, and guessing would be wrong by a factor of ten about half the time.
+The technique list is never inferred from which slab-model blocks are populated —
+ModalFit fills every block a technique *could* read.
+
+Comparison returns each determination with its caveats plus a verdict, and never
+an average. The third outcome matters most: a technique that *cannot* determine a
+parameter is silent, not in disagreement, and collapsing those two turns a
+non-result into a finding.
+
+→ `docs/MODALFIT_INTEGRATION.md`
+
+---
+
 ## Before you report anything
 
-The scaffold runs end to end, but three things are placeholders by design, and
-all three must be replaced before a result leaves the building:
+The scaffold runs end to end, but four things are placeholders by design, and
+all four must be replaced before a result leaves the building:
 
 1. **FOM weights are uniform and unapproved.** Table 4 of `FOM_PROOF` is a list of
    examples. Weights are an application-policy choice with a named approver, not a
@@ -238,6 +319,14 @@ all three must be replaced before a result leaves the building:
    of any CNMS tool. `cnms_integration.instruments.assert_real_registry` blocks
    outward-facing actions until the real registry is wired in.
    → `cnms_integration/instruments.py`
+
+4. **ModalFit's bundled optical constants are placeholders.** Its own README says
+   the Si/Au/Cr/Ti n,k tables are not digitized literature values. An imported fit
+   resting on them is marked `uses_placeholder_optical_constants`, the import warns,
+   and promotion refuses to export an optical property from it — so an SE- or
+   SPR-derived number from such a fit is illustrative until the tables are replaced
+   with literature or measured n,k.
+   → `modalfit/records.py::PLACEHOLDER_NK_MATERIALS`
 
 Every `TODO(FOM_PROOF)` and `TODO(CNMS)` in the source marks one of these. To
 check where you stand:

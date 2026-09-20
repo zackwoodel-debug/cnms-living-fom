@@ -81,3 +81,37 @@ class SynthesisTechnique(str, Enum):
     SOLUTION = "solution"
     CNMS_USER_DOC = "cnms_user_doc"
     OTHER = "other"
+
+
+class FitTechnique(str, Enum):
+    """The five characterization techniques ModalFit co-refines on one slab model.
+
+    Distinct from :class:`SynthesisTechnique` on purpose: one is how a film was
+    *grown*, the other is how it was *measured*. Collapsing them would make
+    "which technique produced this thickness?" unanswerable, and that question is
+    the whole point of a co-refinement record.
+    """
+
+    SE = "SE"      # spectroscopic ellipsometry
+    SPR = "SPR"    # surface plasmon resonance
+    QCM = "QCM"    # quartz crystal microbalance
+    XRR = "XRR"    # X-ray reflectometry
+    NR = "NR"      # neutron reflectometry
+
+
+class FitAlgorithm(str, Enum):
+    """The five refinement algorithms ModalFit exposes (README Sec. 6 step 7)."""
+
+    LBFGSB = "L-BFGS-B"
+    NELDER_MEAD = "Nelder-Mead"
+    DIFFERENTIAL_EVOLUTION = "Differential Evolution"
+    BASIN_HOPPING = "Basin-Hopping"
+    DREAM_EMCEE = "DREAM (emcee)"
+
+
+class ChatRole(str, Enum):
+    """Message roles in an assistant conversation."""
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"

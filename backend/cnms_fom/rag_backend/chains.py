@@ -10,6 +10,17 @@ skimming.  Two constraints come straight from FOM_PROOF:
     makes this the single most dangerous interface in the platform.  Hence
     ``assert_not_property_ingestion``: retrieval output is for a human to read,
     and there is no code path from an answer into ``property_values``.
+
+This module is the *single-shot* path: one retrieval, one answer.  It is the right
+shape when the question maps onto one search ("what ALD window does this paper
+report for HfO2 on Si?"), and it is what ``POST /rag/query`` serves.
+
+Retrieval underneath it is no longer a bare vector search.  ``grading`` runs
+hybrid dense+lexical retrieval, grades each candidate for whether it actually
+answers the question, and rewrites the query once if too little survives — so
+"the corpus does not contain this" became a reachable outcome rather than a
+theoretical one.  The multi-step path, where the model chooses each retrieval in
+turn and can reach the ModalFit fit records, is :mod:`agent`.
 """
 
 from __future__ import annotations
@@ -20,7 +31,8 @@ from dataclasses import dataclass, field
 from cnms_fom.config import get_settings
 from cnms_fom.db.enums import SynthesisTechnique
 
-from .vectorstore import ChunkHit, search_chunks
+from .providers import ChatProvider, get_provider
+from .vectorstore import ChunkHit
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +69,15 @@ Answer using only the excerpts above, with inline [n] citations."""
 
 @dataclass
 class RagAnswer:
-    """An answer plus the evidence it was built from."""
+    """An answer plus the evidence it was built from.
+
+    ``retrieval`` carries how the passages were found: which retrievers hit,
+    what each candidate was graded, and whether the query had to be rewritten.
+    It is here because an answer and the search that produced it are one artifact
+    — without it, "why did it not find X?" is unanswerable from the response
+    alone, and the usual conclusion is that the corpus is missing a document it
+    already has.
+    """
 
     question: str
     answer: str
@@ -65,6 +85,11 @@ class RagAnswer:
     model: str = ""
     techniques: list[str] = field(default_factory=list)
     insufficient_context: bool = False
+    provider: str = ""
+    query_was_rewritten: bool = False
+    effective_query: str = ""
+    retrieval: dict = field(default_factory=dict)
+    refused_by_provider: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -74,14 +99,22 @@ class RagAnswer:
             "model": self.model,
             "techniques": self.techniques,
             "insufficient_context": self.insufficient_context,
+            "provider": self.provider,
+            "query_was_rewritten": self.query_was_rewritten,
+            "effective_query": self.effective_query,
+            "retrieval": self.retrieval,
+            "refused_by_provider": self.refused_by_provider,
         }
 
 
 def get_chat_model(model: str | None = None, temperature: float = 0.0):
     """A ``ChatOllama`` bound to the configured server.
 
-    Temperature defaults to 0: this is a retrieval task, and sampling diversity
-    here buys nothing except a wider distribution of invented numbers.
+    Kept for callers that want the raw LangChain object.  New code should go
+    through :func:`providers.get_provider`, which is provider-agnostic and is
+    what everything in this package uses — the guardrails have to behave
+    identically on the local and the remote path, and that is only true if there
+    is one seam.
     """
     try:
         from langchain_ollama import ChatOllama
@@ -111,52 +144,124 @@ def answer_question(
     techniques: list[SynthesisTechnique] | None = None,
     model: str | None = None,
     min_similarity: float = 0.2,
+    provider: ChatProvider | None = None,
+    grade: bool = True,
 ) -> RagAnswer:
-    """Retrieve, then answer strictly from what was retrieved."""
-    from .embeddings import embed_query
+    """Retrieve, then answer strictly from what was retrieved.
 
-    query_vector = embed_query(question)
-    hits = search_chunks(
-        session, query_vector, k=k, techniques=techniques, min_similarity=min_similarity
-    )
+    Retrieval is hybrid (dense + lexical, fused by reciprocal rank), graded for
+    relevance, and retried once with a rewritten query when too little survives.
+    Only passages that graded *useful* reach the prompt: a passage that shares the
+    question's vocabulary without answering it is worse than no passage, because
+    it produces a confident answer with a real citation attached to it.
+
+    ``grade=False`` skips the grading pass — one model call per candidate — and is
+    for exploratory search a human will read themselves, not for generation.
+    """
+    from .grading import retrieve_with_correction
+
+    chat = provider or get_provider(model=model)
     technique_names = [t.value for t in techniques] if techniques else []
 
-    if not hits:
-        #  No retrieval, no answer. Returning the model's unaided opinion here
-        #  would be precisely the failure mode Sec. 2.3 is written against.
+    outcome = retrieve_with_correction(
+        session,
+        question,
+        k=k,
+        techniques=techniques,
+        min_similarity=min_similarity,
+        provider=chat,
+        grade=grade,
+    )
+    retrieval_trace = {
+        "attempts": outcome.attempts,
+        "graded": outcome.graded,
+        "candidates": [
+            {
+                "citation": hit.fused.hit.citation(),
+                "grade": hit.grade,
+                "grade_reason": hit.reason,
+                "rrf_score": hit.fused.rrf_score,
+                "found_by": [
+                    name
+                    for name, rank in (
+                        ("vector", hit.fused.vector_rank),
+                        ("lexical", hit.fused.lexical_rank),
+                    )
+                    if rank is not None
+                ],
+            }
+            for hit in outcome.hits
+        ],
+    }
+
+    if not outcome.sufficient:
+        #  No usable retrieval, no answer. Returning the model's unaided opinion
+        #  here would be precisely the failure mode Sec. 2.3 is written against.
+        #  The message distinguishes the two ways this happens, because they have
+        #  different fixes: nothing retrieved means ingest or widen the filter;
+        #  retrieved-but-ungraded means the corpus has adjacent material and not
+        #  the answer, which is a different shopping list.
+        searched = any(attempt.get("n_candidates") for attempt in outcome.attempts)
+        detail = (
+            "Passages were retrieved but none graded useful for this question — the corpus holds "
+            "adjacent material, not the answer."
+            if searched
+            else "No indexed passage matched this question at all."
+        )
         return RagAnswer(
             question=question,
             answer=(
-                "[DATA GAP: explicitly unresolved] No indexed passage met the similarity "
-                "threshold for this question. Ingest the relevant process documentation, or "
-                "widen the technique filter, before relying on an answer."
+                f"[DATA GAP: explicitly unresolved] {detail} Ingest the relevant process "
+                "documentation, widen the technique filter, or name the specific document that "
+                "would resolve it."
             ),
-            sources=[],
-            model=model or get_settings().ollama_chat_model,
+            sources=[hit.fused.hit for hit in outcome.hits],
+            model=chat.model,
+            provider=chat.name,
             techniques=technique_names,
             insufficient_context=True,
+            query_was_rewritten=outcome.rewritten,
+            effective_query=outcome.effective_query,
+            retrieval=retrieval_trace,
         )
 
-    try:
-        from langchain_core.prompts import ChatPromptTemplate
-    except ImportError as exc:  # pragma: no cover - depends on optional extra
-        raise ImportError("RAG needs the 'rag' extra: pip install -e '.[rag]'") from exc
-
-    chat = get_chat_model(model)
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", SYNTHESIS_SYSTEM_PROMPT), ("human", USER_PROMPT)]
+    hits = [hit.fused.hit for hit in outcome.useful]
+    result = chat.send(
+        SYNTHESIS_SYSTEM_PROMPT.format(context=format_context(hits)),
+        [{"role": "user", "content": USER_PROMPT.format(question=question)}],
     )
-    chain = prompt | chat
-    response = chain.invoke({"context": format_context(hits), "question": question})
-    text = getattr(response, "content", str(response))
+
+    if result.refused:
+        return RagAnswer(
+            question=question,
+            answer=(
+                "The language model declined to answer this question"
+                + (f" (category: {result.refusal_category})" if result.refusal_category else "")
+                + ". The retrieved passages are returned below unchanged — read them directly, or "
+                "put the same question to a different provider."
+            ),
+            sources=hits,
+            model=result.model,
+            provider=result.provider,
+            techniques=technique_names,
+            insufficient_context=True,
+            refused_by_provider=True,
+            query_was_rewritten=outcome.rewritten,
+            effective_query=outcome.effective_query,
+            retrieval=retrieval_trace,
+        )
 
     return RagAnswer(
         question=question,
-        answer=text,
+        answer=result.text,
         sources=hits,
-        model=model or get_settings().ollama_chat_model,
+        model=result.model,
+        provider=result.provider,
         techniques=technique_names,
-        insufficient_context="[DATA GAP" in text,
+        insufficient_context="[DATA GAP" in result.text,
+        query_was_rewritten=outcome.rewritten,
+        effective_query=outcome.effective_query,
+        retrieval=retrieval_trace,
     )
 
 

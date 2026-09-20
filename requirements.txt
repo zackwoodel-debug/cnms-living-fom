@@ -35,6 +35,11 @@ langchain-core>=0.2
 langchain-community>=0.2
 langchain-text-splitters>=0.2
 langchain-ollama>=0.1
+
+# Optional: Anthropic as the assistant's chat model instead of local Ollama.
+# Opt-in via RAG_LLM_PROVIDER=anthropic; retrieved corpus excerpts then leave
+# this machine.
+anthropic>=1.0
 pypdf>=4.2
 
 # --- Dev ------------------------------------------------------------------

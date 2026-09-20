@@ -49,7 +49,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, embedding_column_type
 from .enums import (
+    ChatRole,
     CorrelationBlock,
+    FitTechnique,
     HypothesisOutcome,
     ProvenanceTier,
     ScoreStatus,
@@ -1089,6 +1091,312 @@ class ExternalRecord(Base, TimestampMixin):
         ForeignKey("materials.id", ondelete="SET NULL")
     )
     promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---------------------------------------------------------------------------
+# ModalFit co-refinement records
+#
+# ModalFit fits one shared slab model against up to five characterization
+# techniques at once (SE / SPR / QCM / XRR / NR).  The reason that matters here
+# is not the fitting — it is that a co-refinement is the only place the platform
+# ever gets the *same* quantity from independent physics.  An XRR thickness and
+# an SE thickness for one film are two measurements of one number by two
+# unrelated forward models, and their disagreement is a data-quality signal
+# nothing else in the schema can produce.
+#
+# So a fit is stored as a measurement record, not as a file: the per-layer
+# fitted parameters, which techniques contributed, the per-technique
+# chi-squared, and which parameters were actually free.  A parameter held fixed
+# is not a measurement of anything, and the schema keeps that distinction
+# because ``modalfit.promote`` refuses to turn a fixed parameter into a
+# ``PropertyValue``.
+# ---------------------------------------------------------------------------
+
+
+class FitRecord(Base, TimestampMixin):
+    """One ModalFit refinement of one slab model against one or more techniques."""
+
+    __tablename__ = "fit_records"
+    __table_args__ = (
+        #  Re-importing the same exported JSON is a no-op, the same way PDF
+        #  ingestion is idempotent by content hash.
+        UniqueConstraint("content_sha256", name="uq_fit_record_content"),
+        Index("ix_fit_records_sample", "sample_id"),
+        Index("ix_fit_records_stack", "stack_id"),
+        CheckConstraint(
+            "n_free_parameters IS NULL OR n_free_parameters >= 0",
+            name="ck_fit_free_parameters_nonneg",
+        ),
+        #  A reduced chi-squared is a ratio of squares; negative is a bug.
+        CheckConstraint("chi2_total IS NULL OR chi2_total >= 0", name="ck_fit_chi2_nonneg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    #  ModalFit's own identifiers, carried through verbatim so a fit can be
+    #  traced back to the app and to DataFed without a lookup table.
+    stack_id: Mapped[str | None] = mapped_column(String(128))
+    sample_id: Mapped[str | None] = mapped_column(String(128))
+
+    #  Where the JSON came from, and its hash — a fit is evidence, and evidence
+    #  needs to stay identifiable after the file is moved.
+    source_filename: Mapped[str | None] = mapped_column(String(512))
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    #  DataFed record id when the model JSON was pushed or pulled through it.
+    datafed_record_id: Mapped[str | None] = mapped_column(String(128))
+
+    #  Which techniques were co-refined: ["XRR", "SE"].  A list, not a scalar —
+    #  the co-refinement *is* the record.
+    techniques: Mapped[list] = mapped_column(JSONType, nullable=False)
+    #  Relative weight each technique carried in the combined objective.
+    technique_weights: Mapped[dict | None] = mapped_column(JSONType)
+    algorithm: Mapped[str | None] = mapped_column(String(32))
+
+    chi2_total: Mapped[float | None] = mapped_column(Float)
+    #  {"XRR": 1.84, "SE": 3.02} — a combined chi-squared hides which technique
+    #  the model actually fails to describe.
+    chi2_by_technique: Mapped[dict | None] = mapped_column(JSONType)
+    n_free_parameters: Mapped[int | None] = mapped_column(Integer)
+
+    #  Known-limitation flags, read off the fit's own settings rather than
+    #  assumed.  ModalFit builds its refnx models with dq=0.0, so XRR/NR fits
+    #  carry no angular-resolution smearing and show sharper fringe contrast
+    #  than the instrument measured; the SPR path ignores layer roughness
+    #  entirely.  Both bias the fitted values, and a downstream consumer that
+    #  does not know cannot correct for it.
+    resolution_smearing_applied: Mapped[bool | None] = mapped_column(Boolean)
+    roughness_applied_to_spr: Mapped[bool | None] = mapped_column(Boolean)
+    #  True when any layer's optical constants came from the bundled placeholder
+    #  n/k tables.  ModalFit's README says these are not digitized literature
+    #  values; an SE-derived number resting on them is not a citable result.
+    uses_placeholder_optical_constants: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+
+    #  Per-technique instrument settings (AOI, energy, Q-range, overtones ...).
+    technique_settings: Mapped[dict | None] = mapped_column(JSONType)
+    #  The exported slab-model JSON, unmodified.  Same reasoning as
+    #  ``ExternalRecord.payload``: re-parsing beats re-importing.
+    raw_model: Mapped[dict | None] = mapped_column(JSONType)
+
+    fitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    operator: Mapped[str | None] = mapped_column(String(128))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    #  Optional links into the rest of the platform.  Both nullable: a fit is a
+    #  complete record on its own, and forcing a material identity at import
+    #  time would mean guessing a polymorph, which Sec. 2.1 forbids.
+    material_id: Mapped[int | None] = mapped_column(
+        ForeignKey("materials.id", ondelete="SET NULL")
+    )
+    experiment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("experiments.id", ondelete="SET NULL")
+    )
+
+    layers: Mapped[list[FitLayer]] = relationship(
+        back_populates="fit", cascade="all, delete-orphan", order_by="FitLayer.layer_index"
+    )
+    datasets: Mapped[list[FitDataset]] = relationship(
+        back_populates="fit", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        techniques = "+".join(self.techniques or [])
+        return f"<FitRecord {self.sample_id or self.stack_id} [{techniques}]>"
+
+
+class FitLayer(Base, TimestampMixin):
+    """One slab in a fitted stack, with its refined parameters.
+
+    Parameters live in a dict rather than in columns because the set is
+    technique-dependent: a QCM-only fit has a shear modulus and no SLD, an
+    XRR/NR fit has SLD and no dispersion model.  Columns for the union would be
+    mostly NULL and would still need extending for the next technique.
+
+    ``free_parameters`` is the load-bearing field.  A thickness held fixed
+    during refinement is an *input* to the fit, and promoting it as a measured
+    thickness would be fabrication dressed up as instrument data.
+    """
+
+    __tablename__ = "fit_layers"
+    __table_args__ = (
+        UniqueConstraint("fit_record_id", "layer_index", name="uq_fit_layer_position"),
+        Index("ix_fit_layers_label", "label"),
+        CheckConstraint("layer_index >= 0", name="ck_fit_layer_index_nonneg"),
+        CheckConstraint("role IN ('ambient', 'layer', 'substrate')", name="ck_fit_layer_role"),
+        CheckConstraint(
+            "thickness_ang IS NULL OR thickness_ang >= 0", name="ck_fit_layer_thickness_nonneg"
+        ),
+        CheckConstraint(
+            "roughness_ang IS NULL OR roughness_ang >= 0", name="ck_fit_layer_roughness_nonneg"
+        ),
+        CheckConstraint(
+            "density_g_cm3 IS NULL OR density_g_cm3 > 0", name="ck_fit_layer_density_positive"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fit_record_id: Mapped[int] = mapped_column(
+        ForeignKey("fit_records.id", ondelete="CASCADE"), index=True
+    )
+
+    #  Ambient at index 0, substrate last — the slab order ModalFit uses.
+    layer_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(128))
+    material: Mapped[str | None] = mapped_column(String(128))
+    #  From the layer's ``molecular`` block; what lets refnx derive SLD from
+    #  composition instead of a hand-entered number.
+    formula: Mapped[str | None] = mapped_column(String(128))
+
+    #  Promoted out of ``parameters`` because every technique shares them and
+    #  they are what cross-technique comparison is actually about.  Angstroms,
+    #  matching ModalFit's slab-model units.
+    thickness_ang: Mapped[float | None] = mapped_column(Float)
+    roughness_ang: Mapped[float | None] = mapped_column(Float)
+    density_g_cm3: Mapped[float | None] = mapped_column(Float)
+
+    #  {"structural": {...}, "optical": {...}, "xray": {...}, "neutron": {...},
+    #   "viscoelastic": {...}} — the slab-model blocks, values only.
+    parameters: Mapped[dict | None] = mapped_column(JSONType)
+    #  Names of the parameters that were varied, e.g. ["thickness", "roughness"].
+    free_parameters: Mapped[list | None] = mapped_column(JSONType)
+    #  {param: {"min": ..., "max": ...}} as refined, so "hit the bound" stays
+    #  detectable afterwards.  A parameter resting on its bound has not
+    #  converged; it has been clamped.
+    bounds: Mapped[dict | None] = mapped_column(JSONType)
+    #  Per-parameter 1-sigma from the optimizer, when it reported any.  Only
+    #  DREAM (emcee) produces a posterior; the four scipy minimizers do not, and
+    #  a fitted value with no uncertainty must not be dressed as having one.
+    uncertainties: Mapped[dict | None] = mapped_column(JSONType)
+
+    fit: Mapped[FitRecord] = relationship(back_populates="layers")
+
+
+class FitDataset(Base, TimestampMixin):
+    """The experimental data one technique contributed to a fit.
+
+    Without this a chi-squared is unfalsifiable: 1.8 over 40 points in a narrow
+    Q-range and 1.8 over 400 points across two decades are not the same claim.
+    """
+
+    __tablename__ = "fit_datasets"
+    __table_args__ = (
+        UniqueConstraint("fit_record_id", "technique", name="uq_fit_dataset_technique"),
+        Index("ix_fit_datasets_technique", "technique"),
+        CheckConstraint("n_points IS NULL OR n_points >= 0", name="ck_fit_dataset_points_nonneg"),
+        CheckConstraint("chi2 IS NULL OR chi2 >= 0", name="ck_fit_dataset_chi2_nonneg"),
+        CheckConstraint("weight IS NULL OR weight >= 0", name="ck_fit_dataset_weight_nonneg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    fit_record_id: Mapped[int] = mapped_column(
+        ForeignKey("fit_records.id", ondelete="CASCADE"), index=True
+    )
+
+    technique: Mapped[FitTechnique] = mapped_column(
+        enum_column(FitTechnique, "fit_technique", length=8), nullable=False
+    )
+    #  Instrument file as loaded: Woollam .dat, Rigaku .ras, IMES CSV, ORSO text.
+    source_filename: Mapped[str | None] = mapped_column(String(512))
+    loader: Mapped[str | None] = mapped_column(String(64))
+    datafed_record_id: Mapped[str | None] = mapped_column(String(128))
+
+    n_points: Mapped[int | None] = mapped_column(Integer)
+    #  The fitted window, in that technique's own units (Q in 1/A, wavelength in
+    #  nm, angle in degrees, Δf in Hz).  Units are recorded, not assumed.
+    x_min: Mapped[float | None] = mapped_column(Float)
+    x_max: Mapped[float | None] = mapped_column(Float)
+    x_units: Mapped[str | None] = mapped_column(String(32))
+
+    chi2: Mapped[float | None] = mapped_column(Float)
+    weight: Mapped[float | None] = mapped_column(Float)
+    #  Instrument settings for this technique on this fit (AOI, energy, overtones).
+    settings: Mapped[dict | None] = mapped_column(JSONType)
+
+    fit: Mapped[FitRecord] = relationship(back_populates="datasets")
+
+
+# ---------------------------------------------------------------------------
+# Research-assistant conversations
+#
+# Persisted rather than held in process memory, for two reasons that have
+# nothing to do with convenience:
+#
+#   * A retrieval answer is auditable only if the evidence behind it is
+#     recoverable later.  ``ChatMessage.evidence`` stores the exact chunk ids,
+#     similarities, and tool results behind each answer, so "where did that
+#     number come from?" still has an answer six months on.
+#   * ModalFit's own session store is explicitly in-process memory keyed by a
+#     cookie, and its README names that as the thing to fix before a
+#     multi-worker deployment.  Repeating the choice here would repeat the
+#     defect.
+# ---------------------------------------------------------------------------
+
+
+class ChatSession(Base, TimestampMixin):
+    """One conversation with the research assistant."""
+
+    __tablename__ = "chat_sessions"
+    __table_args__ = (
+        Index("ix_chat_sessions_created", "created_at"),
+        Index("ix_chat_sessions_sample", "sample_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    #  Opaque, client-supplied or generated; what the API exposes instead of the
+    #  integer primary key.
+    session_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    title: Mapped[str | None] = mapped_column(String(256))
+    user: Mapped[str | None] = mapped_column(String(128))
+
+    #  Optional scoping: a conversation pinned to one sample gets that sample's
+    #  fits offered to the model without being asked for them by name.
+    sample_id: Mapped[str | None] = mapped_column(String(128))
+    #  Corpus partitions this conversation is restricted to, if any.
+    techniques: Mapped[list | None] = mapped_column(JSONType)
+
+    chat_model: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str | None] = mapped_column(String(32))
+
+    messages: Mapped[list[ChatMessage]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="ChatMessage.turn_index",
+    )
+
+
+class ChatMessage(Base, TimestampMixin):
+    """One turn, with the evidence behind it."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        UniqueConstraint("session_id", "turn_index", name="uq_chat_message_turn"),
+        CheckConstraint("turn_index >= 0", name="ck_chat_turn_nonneg"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"), index=True
+    )
+    turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[ChatRole] = mapped_column(
+        enum_column(ChatRole, "chat_role", length=16), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    #  [{"tool": "compare_fit_techniques", "arguments": {...}, "result": {...}}]
+    tool_calls: Mapped[list | None] = mapped_column(JSONType)
+    #  Retrieved chunk ids, similarities, and citations behind this answer.
+    evidence: Mapped[list | None] = mapped_column(JSONType)
+    #  True when the assistant declined for want of evidence (Sec. 2.3).  Stored
+    #  because a refusal rate is a corpus-coverage metric, not a failure log.
+    insufficient_context: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    chat_model: Mapped[str | None] = mapped_column(String(64))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+
+    session: Mapped[ChatSession] = relationship(back_populates="messages")
 
 
 #  Registered last, once every mapped class above exists.  Importing ``models``

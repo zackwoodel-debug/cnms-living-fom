@@ -1,0 +1,62 @@
+{
+  "_comment": "Example ModalFit export: HfO2 on Si, XRR alone. Pairs with example_hfo2_se_fitted.json, which fits the same film by ellipsometry and lands 47% thicker — that disagreement is the point of the pair. Illustrative numbers, not a citable dataset.",
+  "stack_id": "20260901_hfo2_pilot07_xrr_v1",
+  "sample_id": "HFO2-PILOT-07",
+  "length_units": "angstrom",
+  "fit": {
+    "techniques": ["XRR"],
+    "algorithm": "L-BFGS-B",
+    "chi2": 1.84,
+    "chi2_by_technique": {"XRR": 1.84},
+    "fitted_at": "2026-09-01T14:22:10",
+    "operator": "example",
+    "tech_settings": {
+      "XRR": {
+        "energy_keV": 8.04,
+        "wavelength_A": 1.5406,
+        "q_min": 0.01,
+        "q_max": 0.6,
+        "use_material_sld": true
+      }
+    }
+  },
+  "stack": [
+    {"role": "ambient", "label": "air", "optical": {"n": 1.0, "k": 0.0}},
+    {
+      "role": "layer",
+      "label": "hfo2_film",
+      "material": "HfO2",
+      "structural": {
+        "thickness": {"value": 103.4, "min": 50.0, "max": 200.0, "vary": true},
+        "roughness": {"value": 4.2, "min": 0.0, "max": 20.0, "vary": true}
+      },
+      "xray": {
+        "sld_real": {"value": 40.1, "min": 30.0, "max": 50.0, "vary": true},
+        "sld_imag": {"value": 1.2, "min": 0.0, "max": 5.0}
+      },
+      "molecular": {
+        "formula": "HfO2",
+        "density": {"value": 9.1, "min": 8.0, "max": 10.5, "vary": true}
+      }
+    },
+    {
+      "role": "layer",
+      "label": "interfacial_sio2",
+      "material": "SiO2",
+      "structural": {
+        "thickness": {"value": 8.6, "min": 0.0, "max": 30.0, "vary": true},
+        "roughness": {"value": 2.1, "min": 0.0, "max": 10.0}
+      },
+      "xray": {"sld_real": {"value": 18.9, "min": 15.0, "max": 22.0}},
+      "molecular": {"formula": "SiO2", "density": {"value": 2.2}}
+    },
+    {
+      "role": "substrate",
+      "label": "silicon",
+      "material": "Si",
+      "structural": {"roughness": {"value": 3.0, "min": 0.0, "max": 10.0}},
+      "xray": {"sld_real": {"value": 20.07}, "sld_imag": {"value": 0.46}},
+      "molecular": {"formula": "Si", "density": {"value": 2.33}}
+    }
+  ]
+}

@@ -58,6 +58,12 @@ rag = [
 # embeddings in a JSON column and ranks in Python.
 vector = ["pgvector>=0.3"]
 
+# Anthropic as the assistant's chat model, instead of local Ollama.  Opt-in, and
+# it is a real trade: retrieved excerpts from the synthesis corpus — including
+# unpublished CNMS user documents — leave the machine.  Set
+# RAG_LLM_PROVIDER=anthropic only when that is acceptable for the corpus at hand.
+anthropic = ["anthropic>=1.0"]
+
 dev = [
   "pytest>=8.2",
   "httpx>=0.27",
@@ -65,7 +71,7 @@ dev = [
   "mypy>=1.10",
 ]
 
-all = ["cnms-living-fom[descriptors,bo,rag,vector,dev]"]
+all = ["cnms-living-fom[descriptors,bo,rag,vector,anthropic,dev]"]
 
 [project.scripts]
 cnms-fom = "cnms_fom.cli:main"

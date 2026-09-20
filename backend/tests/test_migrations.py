@@ -175,3 +175,83 @@ def test_migrated_schema_matches_the_orm_metadata(alembic_config):
     from cnms_fom.db.base import Base
 
     assert migrated == set(Base.metadata.tables)
+
+
+def test_revision_0003_adds_the_fit_and_conversation_tables(alembic_config):
+    config, url = alembic_config
+    engine = create_engine(url, future=True)
+
+    command.upgrade(config, "0002")
+    added = {"fit_records", "fit_layers", "fit_datasets", "chat_sessions", "chat_messages"}
+    assert not (added & set(inspect(engine).get_table_names()))
+
+    command.upgrade(config, "0003")
+    assert added <= set(inspect(engine).get_table_names())
+
+    #  The constraints that encode the protocol, not just the columns.
+    assert "ck_fit_layer_role" in _constraint_names(engine, "fit_layers")
+    assert "ck_fit_chi2_nonneg" in _constraint_names(engine, "fit_records")
+    assert "ck_chat_turn_nonneg" in _constraint_names(engine, "chat_messages")
+
+    command.downgrade(config, "0002")
+    assert not (added & set(inspect(engine).get_table_names()))
+    engine.dispose()
+
+
+def test_a_fit_record_survives_a_0003_round_trip(alembic_config):
+    """The tables are dropped on downgrade, so the check is that re-upgrading
+    leaves a usable schema rather than a half-applied one."""
+    config, url = alembic_config
+    engine = create_engine(url, future=True)
+
+    command.upgrade(config, "head")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO fit_records (content_sha256, techniques, "
+                "uses_placeholder_optical_constants, created_at) "
+                "VALUES ('abc123', '[\"XRR\"]', 0, '2026-01-01')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO fit_layers (fit_record_id, layer_index, role, label, thickness_ang, "
+                "created_at) VALUES (1, 1, 'layer', 'film', 103.4, '2026-01-01')"
+            )
+        )
+
+    command.downgrade(config, "0002")
+    command.upgrade(config, "head")
+
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT COUNT(*) FROM fit_records")).scalar() == 0
+    assert "ck_fit_layer_thickness_nonneg" in _constraint_names(engine, "fit_layers")
+    engine.dispose()
+
+
+def test_a_layer_with_an_invalid_role_is_rejected_by_the_database(alembic_config):
+    """The stack order has to be readable, so 'role' is a closed set in SQL."""
+    import sqlalchemy.exc
+
+    config, url = alembic_config
+    command.upgrade(config, "head")
+    engine = create_engine(url, future=True)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO fit_records (content_sha256, techniques, "
+                "uses_placeholder_optical_constants, created_at) "
+                "VALUES ('def456', '[\"XRR\"]', 0, '2026-01-01')"
+            )
+        )
+
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO fit_layers (fit_record_id, layer_index, role, created_at) "
+                    "VALUES (1, 0, 'interlayer', '2026-01-01')"
+                )
+            )
+    engine.dispose()

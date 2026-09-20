@@ -54,8 +54,51 @@ def ready() -> dict:
         "bo": _installed("botorch"),
         "rag": _installed("langchain_ollama"),
         "pgvector": _installed("pgvector"),
+        "anthropic": _installed("anthropic"),
     }
     checks["ollama"] = {"base_url": settings.ollama_base_url, "chat_model": settings.ollama_chat_model}
+
+    #  Which provider the assistant will actually use, and whether it can. An
+    #  "anthropic" provider with no credential resolves at request time and fails
+    #  there; saying so here turns a 503 mid-conversation into a startup check.
+    checks["assistant"] = {
+        "provider": settings.rag_llm_provider,
+        "ollama_chat_model": settings.ollama_chat_model,
+        "anthropic_model": settings.anthropic_model,
+        "anthropic_sdk_installed": _installed("anthropic"),
+        "max_steps": settings.assistant_max_steps,
+    }
+    if settings.rag_llm_provider == "anthropic":
+        checks["assistant"]["warning"] = (
+            "Corpus excerpts — including CNMS user documents — are sent to the Anthropic API. "
+            "Set RAG_LLM_PROVIDER=ollama to keep retrieval on this machine."
+        )
+
+    #  The lexical half of hybrid retrieval. Without the functional GIN index
+    #  from migration 0003 it still works and scans, which is the kind of thing
+    #  that looks fine in a test corpus and falls over at 50,000 chunks.
+    try:
+        from sqlalchemy import text as _text
+
+        from cnms_fom.db.base import get_engine as _engine
+
+        with _engine().connect() as connection:
+            if connection.dialect.name == "postgresql":
+                indexed = bool(
+                    connection.execute(
+                        _text(
+                            "SELECT 1 FROM pg_indexes WHERE indexname = 'ix_document_chunks_fts'"
+                        )
+                    ).first()
+                )
+                checks["retrieval"] = {"lexical_backend": "postgres_fulltext", "fts_index": indexed}
+            else:
+                checks["retrieval"] = {
+                    "lexical_backend": "python_term_overlap",
+                    "note": "No full-text search on this backend; lexical retrieval scans.",
+                }
+    except Exception as exc:  # noqa: BLE001
+        checks["retrieval"] = {"ok": False, "error": str(exc)}
 
     return {
         "status": "ok" if checks["database"]["ok"] else "degraded",

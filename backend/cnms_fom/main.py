@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cnms_fom import __version__
 from cnms_fom.config import get_settings
-from cnms_fom.routers import bo, fom, health, materials, pilot, rag
+from cnms_fom.routers import bo, fom, health, materials, modalfit, pilot, rag
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,14 @@ Constraints the API enforces rather than documents:
   are versioned parts of a FOM definition. Changing one creates a new version
   (Sec. 5.3).
 * Retrieval output is for reading, not data entry. There is no code path from a
-  RAG answer into `property_values` (Sec. 15.2).
+  RAG answer into `property_values` (Sec. 15.2). Fitted values from ModalFit are a
+  different case — instrument-derived, promoted through an explicit call that
+  requires a material identity a person supplied (`POST /modalfit/fits/{id}/promote`).
+* A ModalFit co-refinement is stored as a measurement record, not a file. Where two
+  techniques determine the same quantity, both determinations are kept and the
+  disagreement is reported. Nothing averages them (Sec. 2.1).
+* The research assistant answers only from tool results. An answer produced without
+  a retrieval is replaced by an explicit data gap before it is returned.
 """
 
 
@@ -75,7 +82,16 @@ app = FastAPI(
         {"name": "health", "description": "Liveness, readiness, installed extras."},
         {"name": "materials", "description": "Materials, structures, descriptors (S), properties (P)."},
         {"name": "fom", "description": "Scores, correlations, mediated effects, integrity checks."},
-        {"name": "rag", "description": "Retrieval over the synthesis corpus, via local Ollama."},
+        {
+            "name": "rag",
+            "description": "Retrieval over the synthesis corpus and the multi-step research "
+            "assistant. Local via Ollama by default; Anthropic by explicit opt-in.",
+        },
+        {
+            "name": "modalfit",
+            "description": "Multi-technique co-refinements (SE/SPR/QCM/XRR/NR) as measurement "
+            "records, and cross-technique agreement.",
+        },
         {"name": "bo", "description": "Bayesian optimization over growth recipes."},
         {"name": "pilot", "description": "The HfO2-on-Si worked example, end to end."},
     ],
@@ -94,6 +110,7 @@ app.include_router(health.router)
 app.include_router(materials.router)
 app.include_router(fom.router)
 app.include_router(rag.router)
+app.include_router(modalfit.router)
 app.include_router(bo.router)
 app.include_router(pilot.router)
 

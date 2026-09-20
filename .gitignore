@@ -33,6 +33,10 @@ data/structures/*
 !data/structures/.gitkeep
 data/exports/*
 !data/exports/.gitkeep
+# ModalFit exports: real ones are sample data, the two examples are committed.
+data/fits/*
+!data/fits/.gitkeep
+!data/fits/example_*.json
 ollama/
 
 # OS / editor

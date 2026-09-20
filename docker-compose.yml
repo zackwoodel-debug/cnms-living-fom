@@ -83,10 +83,19 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       PERMUTATION_B: ${PERMUTATION_B:-10000}
       RANDOM_SEED: ${RANDOM_SEED:-20260823}
+      # Defaults to the local Ollama provider, so corpus excerpts stay on this
+      # machine. Set RAG_LLM_PROVIDER=anthropic in .env only when sending them to
+      # a remote API is acceptable for the corpus loaded.
+      RAG_LLM_PROVIDER: ${RAG_LLM_PROVIDER:-ollama}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+      ASSISTANT_MAX_STEPS: ${ASSISTANT_MAX_STEPS:-6}
+      ASSISTANT_HISTORY_TURNS: ${ASSISTANT_HISTORY_TURNS:-6}
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
-      # Corpus PDFs and exports. Ingest with the container path, e.g. /app/data/pdfs.
+      # Corpus PDFs, ModalFit exports, and data exports. Use the container path
+      # when ingesting or importing, e.g. /app/data/pdfs, /app/data/fits.
       - ./data:/app/data
       # Source mounted for development; drop this for a production deployment.
       - ./backend:/app/backend

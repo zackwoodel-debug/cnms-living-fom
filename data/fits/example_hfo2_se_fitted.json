@@ -1,0 +1,52 @@
+{
+  "_comment": "The same film as example_hfo2_xrr_fitted.json, fitted by spectroscopic ellipsometry instead. Thickness comes out 152 A against XRR's 103.4 A — a 38% spread across two unrelated forward models. `cnms-fom compare-fits HFO2-PILOT-07 --parameter thickness` reports both and refuses to average them. The Si substrate n,k here are ModalFit's bundled placeholders, so the import flags this fit accordingly.",
+  "stack_id": "20260901_hfo2_pilot07_se_v1",
+  "sample_id": "HFO2-PILOT-07",
+  "length_units": "angstrom",
+  "fit": {
+    "techniques": ["SE"],
+    "algorithm": "Nelder-Mead",
+    "chi2": 3.02,
+    "chi2_by_technique": {"SE": 3.02},
+    "fitted_at": "2026-09-01T15:04:41",
+    "operator": "example",
+    "tech_settings": {
+      "SE": {"aoi": 70.0, "wl_min": 250.0, "wl_max": 1000.0, "n_pts": 300}
+    }
+  },
+  "stack": [
+    {"role": "ambient", "label": "air", "optical": {"n": 1.0, "k": 0.0}},
+    {
+      "role": "layer",
+      "label": "hfo2_film",
+      "material": "HfO2",
+      "structural": {
+        "thickness": {"value": 152.0, "min": 50.0, "max": 250.0, "vary": true},
+        "roughness": {"value": 5.1, "min": 0.0, "max": 20.0, "vary": true}
+      },
+      "optical": {
+        "model": "Tauc-Lorentz",
+        "n": {"value": 2.05, "min": 1.7, "max": 2.4, "vary": true},
+        "k": {"value": 0.002, "min": 0.0, "max": 0.05}
+      },
+      "molecular": {"formula": "HfO2", "density": {"value": 9.1}}
+    },
+    {
+      "role": "layer",
+      "label": "interfacial_sio2",
+      "material": "SiO2",
+      "structural": {
+        "thickness": {"value": 8.6, "min": 0.0, "max": 30.0},
+        "roughness": {"value": 2.1, "min": 0.0, "max": 10.0}
+      },
+      "optical": {"n": {"value": 1.46}, "k": {"value": 0.0}}
+    },
+    {
+      "role": "substrate",
+      "label": "silicon",
+      "material": "Si",
+      "structural": {"roughness": {"value": 3.0, "min": 0.0, "max": 10.0}},
+      "optical": {"n": {"value": 3.88}, "k": {"value": 0.018}}
+    }
+  ]
+}

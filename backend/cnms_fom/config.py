@@ -22,10 +22,37 @@ class Settings(BaseSettings):
     pgvector_enabled: bool = True
     embedding_dim: int = 768
 
+    # --- Retrieval / LLM provider -----------------------------------------
+    #  "ollama" keeps every corpus excerpt on this machine, which is why it is
+    #  the default: the corpus is unpublished CNMS process documentation.
+    #  "anthropic" trades that locality for a model that follows the retrieval
+    #  discipline (declining when evidence is thin, carrying a parameter's full
+    #  context, refusing to average disagreeing sources) more reliably.
+    rag_llm_provider: str = "ollama"
+
     # --- Ollama -----------------------------------------------------------
     ollama_base_url: str = "http://localhost:11434"
     ollama_chat_model: str = "llama3.1:8b"
     ollama_embed_model: str = "nomic-embed-text"
+
+    # --- Anthropic (only used when rag_llm_provider == "anthropic") -------
+    #  Left unset by default. When it is unset the SDK resolves credentials
+    #  itself (ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, or an `ant auth login`
+    #  profile), so an explicit empty value here must not shadow that.
+    anthropic_api_key: str | None = None
+    anthropic_model: str = "claude-opus-5"
+    #  Server-side refusal fallback: a policy decline re-runs on a fallback
+    #  model within the same call instead of returning nothing.
+    anthropic_refusal_fallbacks: bool = True
+
+    # --- Research assistant ------------------------------------------------
+    #  Tool-call budget for one assistant turn. Past this the model is usually
+    #  re-searching a corpus that does not hold the answer, and a data gap is
+    #  the honest outcome.
+    assistant_max_steps: int = 6
+    #  Prior exchanges replayed to the model. Evidence is stored for every turn
+    #  regardless; this only bounds what goes back into the prompt.
+    assistant_history_turns: int = 6
 
     # --- API --------------------------------------------------------------
     api_host: str = "0.0.0.0"

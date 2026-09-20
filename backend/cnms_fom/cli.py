@@ -142,6 +142,130 @@ def _ingest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _import_fits(args: argparse.Namespace) -> int:
+    """Import ModalFit exports as measurement records.
+
+    Prints the warnings last, because they are the part worth reading: a fit
+    claiming a technique with no matching slab-model block, or whose parameters
+    finished clamped on their bounds, is stored but is not something to quote.
+    """
+    from cnms_fom.db.base import session_scope
+    from cnms_fom.modalfit.records import import_directory, import_fit
+
+    path = Path(args.path)
+    with session_scope() as db:
+        results = (
+            import_directory(
+                db,
+                path,
+                techniques=args.techniques,
+                algorithm=args.algorithm,
+                length_units=args.length_units,
+            )
+            if path.is_dir()
+            else [
+                import_fit(
+                    db,
+                    path,
+                    techniques=args.techniques,
+                    algorithm=args.algorithm,
+                    length_units=args.length_units,
+                    sample_id=args.sample_id,
+                )
+            ]
+        )
+
+    print(json.dumps(results, indent=2, default=str))
+    warnings = [w for result in results for w in result.get("warnings", [])]
+    if warnings:
+        print("\nWarnings — read these before quoting any number from these fits:")
+        for warning in warnings:
+            print(f"  - {warning}")
+    return 0
+
+
+def _compare_fits(args: argparse.Namespace) -> int:
+    """Cross-technique agreement for one sample."""
+    from cnms_fom.db.base import session_scope
+    from cnms_fom.modalfit.compare import compare_parameter, cross_technique_report
+
+    with session_scope() as db:
+        result = (
+            cross_technique_report(db, args.sample_id, layer_label=args.layer)
+            if args.parameter == "all"
+            else compare_parameter(
+                db, args.sample_id, parameter=args.parameter, layer_label=args.layer
+            )
+        )
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+def _ask(args: argparse.Namespace) -> int:
+    """Put one question to the research assistant and print its evidence trail."""
+    from cnms_fom.config import get_settings
+    from cnms_fom.db.base import session_scope
+    from cnms_fom.db.enums import SynthesisTechnique
+    from cnms_fom.rag_backend import memory
+    from cnms_fom.rag_backend.agent import ask
+    from cnms_fom.rag_backend.providers import get_provider
+
+    settings = get_settings()
+    provider = get_provider(args.provider, args.model)
+    techniques = [SynthesisTechnique(t) for t in (args.technique or [])] or None
+
+    try:
+        with session_scope() as db:
+            session = memory.get_or_create_session(
+                db,
+                args.session,
+                sample_id=args.sample_id,
+                techniques=techniques,
+                provider=provider.name,
+                chat_model=provider.model,
+            )
+            history = memory.load_history(db, session, turns=settings.assistant_history_turns)
+            answer = ask(
+                db,
+                args.question,
+                history=history,
+                sample_id=session.sample_id,
+                techniques=techniques,
+                provider=provider,
+                max_steps=args.max_steps or settings.assistant_max_steps,
+            )
+            memory.record_turn(db, session, args.question, answer)
+            session_key = session.session_key
+    except ImportError as exc:
+        #  A traceback here tells the user nothing they can act on. The two ways
+        #  this fails are a missing extra and an unreachable model server, and
+        #  both have a one-line fix.
+        print(f"The assistant needs an optional dependency: {exc}", file=sys.stderr)
+        print("  pip install -e '.[rag]'          # local Ollama provider", file=sys.stderr)
+        print("  pip install -e '.[anthropic]'    # Anthropic provider", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - a CLI reports, it does not traceback
+        print(f"The assistant could not answer: {exc}", file=sys.stderr)
+        if provider.name == "ollama":
+            print(
+                f"  Is Ollama running at {settings.ollama_base_url}, and are "
+                f"{settings.ollama_chat_model} and {settings.ollama_embed_model} pulled?",
+                file=sys.stderr,
+            )
+        return 1
+
+    for step in answer.steps:
+        print(f"[step {step.step}] {step.tool}({json.dumps(step.arguments)}) -> {step.duration_ms} ms")
+    print(f"\n{answer.answer}\n")
+    if answer.citations:
+        print("Evidence:")
+        for citation in answer.citations:
+            print(f"  - {citation['kind']}: {citation['citation']}")
+    print(f"\nconversation: {session_key}  ({answer.provider}/{answer.model}, {answer.latency_ms} ms)")
+    #  Non-zero on a data gap, so a script can tell "answered" from "could not".
+    return 0 if not answer.insufficient_context else 2
+
+
 def _dictionary(args: argparse.Namespace) -> int:
     from cnms_fom.descriptors.registry import descriptor_dictionary
 
@@ -206,6 +330,62 @@ def main(argv: list[str] | None = None) -> int:
         choices=["mbe", "pld", "ald", "sputtering", "cvd", "solution", "cnms_user_doc", "other"],
     )
     ingest.set_defaults(func=_ingest)
+
+    import_fits = subparsers.add_parser(
+        "import-fits",
+        help="Import a ModalFit exported model JSON, or a directory of them.",
+    )
+    import_fits.add_argument("path")
+    import_fits.add_argument(
+        "--technique",
+        dest="techniques",
+        action="append",
+        choices=["SE", "SPR", "QCM", "XRR", "NR"],
+        help="Technique actually co-refined; repeat for a co-refinement. Required unless the "
+        "export carries its own fit metadata — it is never inferred from the slab-model blocks.",
+    )
+    import_fits.add_argument(
+        "--algorithm",
+        choices=["L-BFGS-B", "Nelder-Mead", "Differential Evolution", "Basin-Hopping", "DREAM (emcee)"],
+    )
+    import_fits.add_argument(
+        "--length-units",
+        default="angstrom",
+        choices=["angstrom", "nm"],
+        help="Unit the export's thicknesses are in. ModalFit's physics backends use angstroms; "
+        "its bundled substrate library is written in nanometres. Not guessed.",
+    )
+    import_fits.add_argument("--sample-id", help="Override the sample id in the export.")
+    import_fits.set_defaults(func=_import_fits)
+
+    compare = subparsers.add_parser(
+        "compare-fits", help="Cross-technique agreement for one sample's fitted parameters."
+    )
+    compare.add_argument("sample_id")
+    compare.add_argument(
+        "--parameter",
+        default="thickness",
+        help="thickness, roughness, density, sld_real, sld_imag, n, k, or 'all'.",
+    )
+    compare.add_argument("--layer", help="Layer label, when the stack has more than one film.")
+    compare.set_defaults(func=_compare_fits)
+
+    ask_parser = subparsers.add_parser(
+        "ask", help="Ask the research assistant one question. Exit code 2 means a data gap."
+    )
+    ask_parser.add_argument("question")
+    ask_parser.add_argument("--session", help="Continue an existing conversation by key.")
+    ask_parser.add_argument("--sample-id", help="Scope the conversation to one ModalFit sample.")
+    ask_parser.add_argument(
+        "--technique",
+        action="append",
+        choices=["mbe", "pld", "ald", "sputtering", "cvd", "solution", "cnms_user_doc", "other"],
+        help="Restrict corpus retrieval to these partitions; repeat to allow several.",
+    )
+    ask_parser.add_argument("--provider", choices=["ollama", "anthropic"])
+    ask_parser.add_argument("--model")
+    ask_parser.add_argument("--max-steps", type=int)
+    ask_parser.set_defaults(func=_ask)
 
     serve = subparsers.add_parser("serve", help="Run the API with uvicorn.")
     serve.add_argument("--host")

@@ -3,7 +3,7 @@
 
 .PHONY: help install install-all test lint typecheck format \
         db-init db-migrate db-revision db-seed db-example serve frontend \
-        up down logs compliance ingest-survey clean
+        up down logs compliance ingest-survey import-fits compare-fits ask clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -48,6 +48,15 @@ compliance:  ## FOM_PROOF Sec. 16 pre-release checklist (incl. DB checks)
 
 ingest-survey:  ## Report what an external materials DB contains. DB=path/to.db
 	python scripts/ingest_materials_db.py survey $(DB)
+
+import-fits:  ## Import ModalFit exports as measurement records. FITS=data/fits
+	cnms-fom import-fits $(or $(FITS),data/fits)
+
+compare-fits:  ## Cross-technique agreement for one sample. SAMPLE=HFO2-PILOT-07
+	cnms-fom compare-fits $(SAMPLE) --parameter $(or $(PARAM),thickness)
+
+ask:  ## Ask the research assistant. Q="your question"  (exit 2 = data gap)
+	cnms-fom ask "$(Q)"
 
 serve:  ## Run the API with reload
 	cnms-fom serve --reload
