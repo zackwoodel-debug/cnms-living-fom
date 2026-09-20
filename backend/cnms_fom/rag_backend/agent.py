@@ -197,6 +197,9 @@ class AgentAnswer:
     hit_step_limit: bool = False
     latency_ms: int = 0
     usage: dict = field(default_factory=dict)
+    #  What the model wrote when it was withheld for want of evidence. Kept for
+    #  transparency and debugging, never presented as the answer.
+    suppressed_answer: str | None = None
 
     @property
     def tools_used(self) -> list[str]:
@@ -219,6 +222,7 @@ class AgentAnswer:
             "hit_step_limit": self.hit_step_limit,
             "latency_ms": self.latency_ms,
             "usage": self.usage,
+            "suppressed_answer": self.suppressed_answer,
         }
 
 
@@ -229,6 +233,36 @@ NO_EVIDENCE_ANSWER = (
     "(FOM_PROOF Sec. 15.2). Rephrase the question toward something the corpus or a stored "
     "fit would contain, or ingest the relevant documentation first."
 )
+
+EMPTY_EVIDENCE_ANSWER = (
+    "[DATA GAP: explicitly unresolved] The assistant searched and every tool came back "
+    "empty, so nothing it wrote could have been grounded in this platform's data. The draft "
+    "has been withheld rather than shown: it was, by construction, the model's own "
+    "recollection, and FOM_PROOF Sec. 15.2 does not let a missing value be filled from a "
+    "plausible number. The tool calls and their empty results are in the evidence trail, and "
+    "the withheld text is on `suppressed_answer` if you want to see what it would have said. "
+    "Ingest the relevant documentation, widen the technique filter, or ask something the "
+    "stored records cover."
+)
+
+#  Result keys that mean a tool actually returned something. Checked explicitly
+#  rather than by "is the dict non-empty", because every tool returns its echoed
+#  arguments and an explanatory note even when it found nothing — so a truthiness
+#  test on the payload says "content" for a completely empty search.
+CONTENT_KEYS: tuple[str, ...] = (
+    "passages", "values", "fits", "determinations", "layers", "cards", "nodes",
+    "observations", "suggestions", "campaigns", "trajectory", "scores", "comparisons",
+    "documents_by_technique", "descriptors", "properties", "spec",
+    "violations", "inconsistencies", "heuristics", "checked",
+    "search_space", "best_recipe", "links_out", "links_in", "body",
+)
+
+
+def _step_has_content(result: dict) -> bool:
+    """Whether one tool call actually returned evidence."""
+    if not isinstance(result, dict) or result.get("error"):
+        return False
+    return any(result.get(key) for key in CONTENT_KEYS)
 
 
 def _collect_citations(steps: list[AgentStep]) -> list[dict]:
@@ -353,6 +387,7 @@ def ask(
     someone made rather than a default nobody noticed.
     """
     started = time.monotonic()
+    suppressed: str | None = None
     provider = provider or get_provider()
     specs = tool_specs(tools, allow_writes=allow_card_writes)
 
@@ -462,6 +497,18 @@ def ask(
         logger.warning("Answer produced with no tool calls; replacing with a data gap.")
         answer_text = NO_EVIDENCE_ANSWER
         insufficient = True
+    elif require_evidence and not any(_step_has_content(step.result) for step in steps):
+        #  Tools ran and every one came back empty. Flagging the answer is not
+        #  enough — the flag is metadata and the text is what a person reads, so a
+        #  model that says "the corpus has nothing, but literature suggests
+        #  200-350 degC" hands over a fabricated number under a correct warning.
+        #  Observed doing exactly that on a local model; withhold the text.
+        logger.warning(
+            "Every tool returned empty; withholding the answer text (%d step(s)).", len(steps)
+        )
+        suppressed = answer_text
+        answer_text = EMPTY_EVIDENCE_ANSWER
+        insufficient = True
     else:
         insufficient = _evidence_was_insufficient(steps, answer_text)
         if not answer_text:
@@ -484,6 +531,7 @@ def ask(
         hit_step_limit=hit_limit,
         latency_ms=int((time.monotonic() - started) * 1000),
         usage=result.usage if result else {},
+        suppressed_answer=suppressed,
     )
 
 

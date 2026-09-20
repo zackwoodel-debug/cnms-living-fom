@@ -630,6 +630,7 @@ def _check_fit_plausibility(
     """
     from cnms_fom.db.models import FitRecord
     from cnms_fom.fom_engine.plausibility import check_fit_layer
+    from cnms_fom.modalfit.compare import available_layer_labels, layer_matches
 
     records = (
         session.query(FitRecord)
@@ -647,13 +648,10 @@ def _check_fit_plausibility(
             "note": f"No ModalFit refinements stored for {sample_id!r}.",
         }
 
-    wanted = layer_label.strip().lower() if layer_label else None
     out: list[dict] = []
     for record in records:
         for layer in record.layers:
-            if layer.role != "layer":
-                continue
-            if wanted and (layer.label or "").strip().lower() != wanted:
+            if layer.role != "layer" or not layer_matches(layer, layer_label):
                 continue
             report = check_fit_layer(layer, techniques=record.techniques)
             out.append(
@@ -666,12 +664,23 @@ def _check_fit_plausibility(
                 }
             )
 
-    return {
+    result = {
         "sample_id": sample_id,
         "n_layers_checked": len(out),
         "layers": out,
         "all_physical": all(entry["physical"] for entry in out) if out else None,
     }
+    if not out:
+        #  Fits exist but the filter matched none of them. Saying nothing here
+        #  would read as "checked, and there is nothing to report", which is the
+        #  most dangerous thing this tool could return.
+        labels = sorted({name for record in records for name in available_layer_labels(record)})
+        result["note"] = (
+            f"{len(records)} fit(s) are stored for {sample_id!r}, but no film layer matched "
+            f"layer_label={layer_label!r}, so nothing was checked. This is not a clean result. "
+            f"Available layer names: {labels}. Omit layer_label to check every film layer."
+        )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -743,7 +752,11 @@ TOOLS: dict[str, Tool] = {
                 "Get every stored ModalFit refinement for one sample: the fitted stack, which "
                 "techniques were co-refined (SE/SPR/QCM/XRR/NR), per-technique chi-squared, which "
                 "parameters were varied, and the caveats that qualify each number. Use this "
-                "whenever the question is about a specific sample's measured structure."
+                "whenever the question is about a specific sample's measured structure. It reports "
+                "the fitted values but does NOT check them: for whether they are physically "
+                "consistent with each other — a density against its SLD, a roughness against its "
+                "layer thickness — call check_fit_plausibility as well. Reading two numbers off "
+                "this tool is not the same as checking that they agree."
             ),
             input_schema={
                 "type": "object",

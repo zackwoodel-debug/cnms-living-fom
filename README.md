@@ -109,7 +109,7 @@ Tests need nothing beyond the base install — no database, no network, no model
 server:
 
 ```bash
-pytest                                  # 398 tests
+pytest                                  # 404 tests
 ```
 
 ### The pilot loop
@@ -310,6 +310,15 @@ Local by default — `RAG_LLM_PROVIDER=ollama` keeps every excerpt on the machin
 because the corpus is unpublished CNMS work. `anthropic` is available and opt-in;
 the trade-off is stated at the switch, logged at WARNING, and reported by
 `/health/ready`.
+
+Set `RAG_GRADER_MODEL` to something small. Relevance grading runs once per
+retrieved candidate and is a 0–3 classification; measured on this scaffold, a 1B
+grader cut a question from 267 s to 145 s and improved the answer.
+
+**Verified end to end** against a local model, which found two bugs now fixed: an
+ungrounded answer was flagged but not withheld, and two tools disagreed about what
+a `layer_label` meant so one silently checked nothing.
+`docs/COSCIENTIST.md` §8 has the run.
 
 → `docs/COSCIENTIST.md` · `docs/RESEARCH_ASSISTANT.md`
 

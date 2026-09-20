@@ -316,16 +316,70 @@ supplied.
 
 ---
 
-## 8. Which model is doing this
+## 8. What a live run actually showed
+
+Verified end to end against Ollama on this machine — `qwen3:14b` answering,
+`nomic-embed-text` embedding, two synthetic ALD papers written to disagree with
+each other on purpose. Four things came out of it, and two were bugs.
+
+**It handles the disagreement correctly.** Asked for the growth per cycle, it
+returned 0.98 Å/cycle for the hot-wall reactor and 1.42 for the cross-flow one,
+each with its pressure and substrate preparation, said outright that "the
+literature does not agree on a single value", and named the four variables
+responsible. It did not average them to 1.2.
+
+**Grading dominates the wall clock, not retrieval.** Retrieval — embedding the
+query, lexical search, fusion — took 1.2 s. Grading seven candidates took 173 s,
+because each is a separate model call and `qwen3:14b` is a reasoning model that
+will think for twenty seconds about whether a passage mentions a growth rate.
+
+> Set `RAG_GRADER_MODEL` to something small. Grading is a 0–3 classification, and
+> `gemma3:1b` did the same job in 4 s per candidate — 145 s for the whole question
+> instead of 267 s, with a *better* answer.
+
+**It fabricated a number, and the guard only half-caught it.** Asked about MBE of
+GaAs on Ge — nothing in the corpus — it correctly reported that the search came
+back empty, then recommended "substrate temperatures below 300 °C" and a
+"200–350 °C" starting range from its own memory. `insufficient_context` was set
+correctly, but that flag is metadata and the text is what a person reads.
+
+> Fixed. When every tool comes back empty the answer text is now **withheld**, not
+> just flagged, and the draft is returned on `suppressed_answer` so nothing is
+> hidden. A turn where any tool returned real content is untouched.
+
+**Two tools disagreed about what `layer_label` meant.** `compare_fit_techniques`
+accepted the material (`HfO2`), `check_fit_plausibility` wanted the label
+(`hfo2_film`). The model passed `HfO2`, got a comparison from one and *silence*
+from the other — and silence reads as "checked, nothing to report", which is the
+worst thing a plausibility check can return.
+
+> Fixed. One shared matcher, and a filter that matches nothing now says so and
+> lists the available names instead of returning a clean-looking zero.
+
+Both fixes have regression tests. The remaining gaps are model compliance, not
+platform behaviour: asked to record what it found, it did not always write a card,
+and it answered a consistency question from `list_sample_fits` without calling the
+plausibility tool. A stronger model follows those instructions more reliably, which
+is the trade the next section is about.
+
+---
+
+## 9. Which model is doing this
 
 **Local by default.** `RAG_LLM_PROVIDER=ollama` keeps every retrieved excerpt on
 the machine, which is the right default when the corpus is unpublished CNMS work.
 
 ```bash
 docker compose up -d db ollama
-docker compose exec ollama ollama pull llama3.1:8b
-docker compose exec ollama ollama pull nomic-embed-text
+docker compose exec ollama ollama pull llama3.1:8b       # answers
+docker compose exec ollama ollama pull nomic-embed-text  # embeddings
+docker compose exec ollama ollama pull gemma3:1b         # grading — see below
 ```
+
+Set `RAG_GRADER_MODEL=gemma3:1b`. Relevance grading runs once per retrieved
+candidate and is a 0–3 classification, so pointing it at the answer model means
+paying answer-grade inference for a judgement that needs none of it — measured at
+6x the wall clock on this scaffold, and worse on a reasoning model.
 
 **Claude is available and opt-in.** The honest trade: the retrieval discipline this
 platform needs — declining when the evidence is thin, carrying a parameter's full
@@ -346,7 +400,7 @@ guardrails are identical — they sit above the provider seam, not inside it.
 
 ---
 
-## 9. Start to finish
+## 10. Start to finish
 
 ```bash
 # 1. Bring it up

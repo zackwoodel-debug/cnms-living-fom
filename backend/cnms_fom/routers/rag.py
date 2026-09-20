@@ -315,6 +315,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
         hit_step_limit=answer.hit_step_limit,
         latency_ms=answer.latency_ms,
         usage=answer.usage,
+        suppressed_answer=answer.suppressed_answer,
     )
 
 

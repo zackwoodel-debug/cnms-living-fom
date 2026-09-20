@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_chat_model: str = "llama3.1:8b"
     ollama_embed_model: str = "nomic-embed-text"
+    #  Optional small model for relevance grading and query rewriting. Those are
+    #  classification tasks — "does this passage answer the question, 0-3" — and
+    #  they run once per retrieved candidate, so they dominate the wall clock
+    #  while needing none of the answer model's reasoning. Measured on this
+    #  scaffold: grading 7 candidates took 173 s on a 14B reasoning model and 29 s
+    #  on a 1B one, for the same decisions. Unset means use the chat model.
+    rag_grader_model: str | None = None
 
     # --- Anthropic (only used when rag_llm_provider == "anthropic") -------
     #  Left unset by default. When it is unset the SDK resolves credentials

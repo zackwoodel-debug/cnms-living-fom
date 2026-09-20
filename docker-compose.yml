@@ -10,6 +10,7 @@
 # First run only, to pull the local models (a few GB):
 #   docker compose exec ollama ollama pull llama3.1:8b
 #   docker compose exec ollama ollama pull nomic-embed-text
+#   docker compose exec ollama ollama pull gemma3:1b   # grading; see RAG_GRADER_MODEL
 # ---------------------------------------------------------------------------
 
 services:
@@ -77,6 +78,8 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_CHAT_MODEL: ${OLLAMA_CHAT_MODEL:-llama3.1:8b}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      # Grading runs once per candidate; a small model here is a large win.
+      RAG_GRADER_MODEL: ${RAG_GRADER_MODEL:-}
       PGVECTOR_ENABLED: ${PGVECTOR_ENABLED:-true}
       EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}

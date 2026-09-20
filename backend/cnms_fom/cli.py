@@ -258,6 +258,10 @@ def _ask(args: argparse.Namespace) -> int:
     for step in answer.steps:
         print(f"[step {step.step}] {step.tool}({json.dumps(step.arguments)}) -> {step.duration_ms} ms")
     print(f"\n{answer.answer}\n")
+    if answer.suppressed_answer:
+        print("--- withheld draft (ungrounded; shown for transparency) ---")
+        print(answer.suppressed_answer.strip()[:1200])
+        print("--- end withheld draft ---\n")
     if answer.citations:
         print("Evidence:")
         for citation in answer.citations:

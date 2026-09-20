@@ -166,6 +166,37 @@ def fits_for_sample(session, sample_id: str, *, limit: int = 50) -> list:
     )
 
 
+def layer_matches(layer, label: str | None) -> bool:
+    """Whether a layer answers to ``label``, by its label or its material.
+
+    Shared so that every tool taking a ``layer_label`` resolves it identically.
+    They were written separately and drifted: ``compare_parameter`` accepted the
+    material ("HfO2") while the plausibility check wanted only the label
+    ("hfo2_film"), so the same argument produced a comparison from one and silence
+    from the other. Silence that looks like "nothing to report" is the worst
+    possible failure here — it reads as a clean result.
+    """
+    if not label:
+        return True
+    wanted = label.strip().lower()
+    return wanted in {
+        (layer.label or "").strip().lower(),
+        (layer.material or "").strip().lower(),
+    } - {""}
+
+
+def available_layer_labels(record) -> list[str]:
+    """Every name a caller could legitimately pass for this record's film layers."""
+    names: list[str] = []
+    for layer in record.layers:
+        if layer.role != "layer":
+            continue
+        for candidate in (layer.label, layer.material):
+            if candidate and candidate not in names:
+                names.append(candidate)
+    return names
+
+
 def _match_layer(record, layer_label: str | None):
     """Pick the layer a comparison is about.
 
@@ -176,11 +207,8 @@ def _match_layer(record, layer_label: str | None):
     """
     films = [layer for layer in record.layers if layer.role == "layer"]
     if layer_label:
-        wanted = layer_label.strip().lower()
         for layer in record.layers:
-            if (layer.label or "").strip().lower() == wanted:
-                return layer
-            if (layer.material or "").strip().lower() == wanted:
+            if layer_matches(layer, layer_label):
                 return layer
         return None
     if len(films) == 1:

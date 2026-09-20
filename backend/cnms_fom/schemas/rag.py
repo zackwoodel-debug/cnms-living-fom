@@ -232,6 +232,12 @@ class ChatResponse(BaseModel):
     )
     latency_ms: int = 0
     usage: dict = Field(default_factory=dict)
+    suppressed_answer: str | None = Field(
+        default=None,
+        description="Set when the answer was withheld because every tool came back empty. It is "
+        "what the model would have said, kept for transparency — an ungrounded draft, not an "
+        "answer.",
+    )
     disclaimer: str = (
         "Retrieval output is for reading, not for data entry. FOM_PROOF Sec. 2.3: a missing "
         "property may not be filled from a plausible number. Fitted values enter the analysis "

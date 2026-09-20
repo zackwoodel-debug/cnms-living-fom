@@ -218,8 +218,8 @@ def test_assistant_config_is_reachable_without_a_model_server(client):
     assert "compare_fit_techniques" in body["tools"]
 
 
-def test_search_degrades_to_lexical_and_reports_the_backend(client):
-    """No Ollama here, so the dense leg is unavailable and lexical carries it."""
+def test_search_degrades_to_lexical_and_reports_the_backend(client, no_dense_retrieval):
+    """With the embedder unreachable, lexical carries the search on its own."""
     from cnms_fom.db.enums import SynthesisTechnique
     from cnms_fom.db.models import Document, DocumentChunk
 
@@ -252,7 +252,7 @@ def test_search_degrades_to_lexical_and_reports_the_backend(client):
     assert body["diagnostics"]["dense_error"]
 
 
-def test_a_search_that_cannot_run_is_503_not_an_empty_result(client):
+def test_a_search_that_cannot_run_is_503_not_an_empty_result(client, no_dense_retrieval):
     """Claiming the corpus lacks something it was never searched for is worse than failing."""
     response = client.post("/rag/search", json={"query": "gallium arsenide"})
     assert response.status_code in (501, 503)

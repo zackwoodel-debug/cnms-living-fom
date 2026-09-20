@@ -178,7 +178,7 @@ def test_fusion_ordering_is_deterministic():
 # --- degradation -----------------------------------------------------------
 
 
-def test_hybrid_search_degrades_to_lexical_when_dense_is_unavailable(db):
+def test_hybrid_search_degrades_to_lexical_when_dense_is_unavailable(db, no_dense_retrieval):
     """Half a retriever beats none; the failure is logged, not fatal."""
     hits = hybrid_search(db, "Nevot-Croce roughness", k=3)
     assert hits
@@ -186,16 +186,16 @@ def test_hybrid_search_degrades_to_lexical_when_dense_is_unavailable(db):
     assert all(hit.vector_rank is None for hit in hits)
 
 
-def test_hybrid_search_raises_when_nothing_retrieved_at_all(db):
+def test_hybrid_search_raises_when_nothing_retrieved_at_all(db, no_dense_retrieval):
     """With no lexical match and no dense leg, the caller needs the real error."""
     with pytest.raises(ImportError, match="rag"):
         hybrid_search(db, "molecular beam epitaxy of gallium arsenide")
 
 
-def test_diagnostics_show_each_retriever_separately(db):
+def test_diagnostics_show_each_retriever_separately(db, no_dense_retrieval):
     report = retrieval_diagnostics(db, "ALD window HfO2")
     assert report["lexical_backend"] == "python_term_overlap"
-    assert report["dense_error"]  # no Ollama in the test environment
+    assert report["dense_error"]  # the fixture makes the embedder unreachable
     assert report["lexical"]
     assert report["fused"]
     assert "hfo2" in report["terms"]
@@ -297,7 +297,7 @@ def test_a_term_the_corpus_lacks_is_an_insufficient_outcome_not_an_error(db):
     assert outcome.attempts[0]["n_candidates"] == 0
 
 
-def test_a_failed_search_is_an_error_not_a_data_gap(db):
+def test_a_failed_search_is_an_error_not_a_data_gap(db, no_dense_retrieval):
     """Reporting "the corpus lacks this" about a search that could not run is worse
     than failing: it is a wrong scientific conclusion dressed as a clean answer."""
     with pytest.raises(ImportError, match="rag"):

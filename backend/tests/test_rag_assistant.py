@@ -659,3 +659,110 @@ def test_fit_plausibility_on_an_unknown_sample_says_so(db):
     result = run_tool(db, "check_fit_plausibility", {"sample_id": "NOPE"})
     assert result["layers"] == []
     assert "No ModalFit refinements" in result["note"]
+
+
+def test_layer_label_resolves_by_material_as_well_as_label(db):
+    """A live run caught these two tools disagreeing on what a layer_label means.
+
+    `compare_fit_techniques` accepted the material ("HfO2") while
+    `check_fit_plausibility` wanted only the label ("hfo2_film"), so the same
+    argument produced a comparison from one and silence from the other — and
+    silence reads as "checked, nothing to report".
+    """
+    for label in ("hfo2_film", "HfO2", "hfo2"):
+        compared = run_tool(
+            db,
+            "compare_fit_techniques",
+            {"sample_id": SAMPLE, "parameter": "thickness", "layer_label": label},
+        )
+        checked = run_tool(
+            db, "check_fit_plausibility", {"sample_id": SAMPLE, "layer_label": label}
+        )
+        assert compared["determinations"], f"compare found nothing for {label!r}"
+        assert checked["n_layers_checked"] >= 1, f"plausibility checked nothing for {label!r}"
+
+
+def test_a_layer_label_that_matches_nothing_says_so_loudly(db):
+    """Fits exist, the filter matched none — that must not look like a pass."""
+    result = run_tool(
+        db, "check_fit_plausibility", {"sample_id": SAMPLE, "layer_label": "not_a_layer"}
+    )
+    assert result["n_layers_checked"] == 0
+    assert result["all_physical"] is None
+    assert "not a clean result" in result["note"]
+    #  And it names what the caller could have passed instead.
+    assert "hfo2_film" in result["note"]
+
+
+# --- the empty-evidence guard ---------------------------------------------
+
+
+def test_an_answer_is_withheld_when_every_tool_came_back_empty(db):
+    """Observed on a local model: it correctly said the corpus had nothing, then
+    supplied "200-350 degC" from memory. Flagging the answer is not enough —
+    the flag is metadata and the text is what a person reads."""
+    from cnms_fom.rag_backend.agent import EMPTY_EVIDENCE_ANSWER
+
+    provider = ScriptedProvider(
+        [
+            tool_reply("search_corpus", {"query": "MBE GaAs on Ge substrate temperature"}),
+            text_reply(
+                "The corpus does not cover this. However, literature suggests substrate "
+                "temperatures below 300 C, and 200-350 C is a reasonable starting range."
+            ),
+        ]
+    )
+    answer = ask(db, "What substrate temperature for MBE of GaAs on Ge?", provider=provider)
+
+    assert answer.answer == EMPTY_EVIDENCE_ANSWER
+    assert answer.insufficient_context is True
+    #  The fabricated numbers are gone from the answer...
+    assert "200-350" not in answer.answer
+    assert "300 C" not in answer.answer
+    #  ...but preserved for transparency rather than silently dropped.
+    assert "200-350 C" in answer.suppressed_answer
+    assert answer.steps  # the empty search is still in the trail
+
+
+def test_an_answer_stands_when_any_tool_returned_content(db):
+    """Only a wholly empty turn is withheld. A real result must survive."""
+    provider = ScriptedProvider(
+        [
+            tool_reply("search_corpus", {"query": "nothing here"}),
+            tool_reply("list_sample_fits", {"sample_id": SAMPLE}),
+            text_reply("XRR gives 103.4 A on fit record 1 [fit_record:1]."),
+        ]
+    )
+    answer = ask(db, "How thick is the film?", provider=provider)
+
+    assert "103.4" in answer.answer
+    assert answer.suppressed_answer is None
+
+
+def test_content_detection_ignores_a_tools_own_echo_and_notes(db):
+    """Every tool echoes its arguments and a note even when it found nothing, so a
+    truthiness test on the payload would call an empty search 'content'."""
+    from cnms_fom.rag_backend.agent import _step_has_content
+
+    empty_search = run_tool(db, "search_corpus", {"query": "gallium arsenide germanium"})
+    assert empty_search.get("note")  # it does explain itself
+    assert _step_has_content(empty_search) is False
+
+    real = run_tool(db, "list_sample_fits", {"sample_id": SAMPLE})
+    assert _step_has_content(real) is True
+
+    assert _step_has_content({"error": "boom"}) is False
+
+
+def test_a_plausibility_only_turn_is_not_treated_as_empty(db):
+    """Checking whether a number is physical needs no retrieval at all."""
+    provider = ScriptedProvider(
+        [
+            tool_reply("check_physical_plausibility", {"values": {"k": 0.4}}),
+            text_reply("A relative permittivity of 0.4 is impossible: it would polarize "
+                       "against the field."),
+        ]
+    )
+    answer = ask(db, "Is k = 0.4 physical?", provider=provider)
+    assert "impossible" in answer.answer
+    assert answer.suppressed_answer is None

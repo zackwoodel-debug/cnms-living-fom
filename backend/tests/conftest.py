@@ -37,3 +37,24 @@ def hfo2_properties() -> dict:
         "kappa_th": 1.1,
         "tan_delta": 2.0e-3,
     }
+
+
+@pytest.fixture
+def no_dense_retrieval(monkeypatch):
+    """Make dense retrieval fail, deterministically.
+
+    Several retrieval tests are about the degraded path: lexical-only search, and
+    the rule that a search which could not *run* is an error rather than a data
+    gap. Those were originally exercised by the ``rag`` extra simply being absent
+    — which meant they passed on CI and broke on any machine that had the extra
+    installed and Ollama running. The behaviour under test is "the embedder is
+    unreachable", so the test has to cause that rather than hope for it.
+    """
+
+    def _unavailable(*args, **kwargs):  # noqa: ARG001
+        raise ImportError("RAG needs the 'rag' extra: pip install -e '.[rag]'")
+
+    monkeypatch.setattr(
+        "cnms_fom.rag_backend.embeddings.embed_query", _unavailable, raising=False
+    )
+    return _unavailable

@@ -37,6 +37,7 @@ import logging
 import re
 from dataclasses import dataclass
 
+from cnms_fom.config import get_settings
 from cnms_fom.db.enums import SynthesisTechnique
 
 from .hybrid import FusedHit, hybrid_search
@@ -100,6 +101,27 @@ trimethylaluminum; ALD and atomic layer deposition).
 Broadening the vocabulary is the goal; changing the question is not.
 
 Reply with JSON only: {"query": "<rewritten query>"}"""
+
+
+def grader_provider(answer_provider: ChatProvider) -> ChatProvider:
+    """The model that grades and rewrites, which need not be the one that answers.
+
+    Grading is a per-candidate classification, so it runs N times per question and
+    dominates the wall clock; answering runs once. Pointing the two at one model
+    means paying answer-grade inference for a 0-3 judgement — and on a reasoning
+    model it is worse than linear, because it will happily think for twenty
+    seconds about whether a passage mentions a growth rate.
+
+    Returns the same provider when ``RAG_GRADER_MODEL`` is unset, so the default
+    behaviour is unchanged.
+    """
+    model = get_settings().rag_grader_model
+    if not model or model == getattr(answer_provider, "model", None):
+        return answer_provider
+    #  Same provider family as the answer model, different weights: a grader
+    #  reachable only through a second vendor would be a second failure mode for
+    #  no benefit.
+    return get_provider(getattr(answer_provider, "name", None), model)
 
 
 @dataclass
@@ -276,6 +298,8 @@ def retrieve_with_correction(
     corpus does not contain this" about a search that was never fully run.
     """
     provider = provider or get_provider()
+    #  Resolved once per question, not once per candidate.
+    grader = grader_provider(provider)
     attempts: list[dict] = []
     effective_query = question
     rewritten = False
@@ -298,13 +322,14 @@ def retrieve_with_correction(
             "attempt": attempt + 1,
             "query": effective_query,
             "n_candidates": len(candidates),
+            "grader_model": grader.model if grade else None,
         }
 
         if not candidates:
             attempts.append({**record, "n_useful": 0, "note": "no candidates retrieved"})
         else:
             hits = (
-                grade_and_rerank(provider, question, candidates)
+                grade_and_rerank(grader, question, candidates)
                 if grade
                 #  Ungraded: treat fusion order as the ranking and mark every
                 #  candidate useful-by-default, flagged via ``graded=False`` so
@@ -326,7 +351,7 @@ def retrieve_with_correction(
             last_hits = hits[:k]
 
         if attempt == 0 and allow_rewrite:
-            candidate_query = rewrite_query(provider, question)
+            candidate_query = rewrite_query(grader, question)
             if candidate_query:
                 logger.info("Retrying retrieval with rewritten query: %r", candidate_query)
                 effective_query = candidate_query
