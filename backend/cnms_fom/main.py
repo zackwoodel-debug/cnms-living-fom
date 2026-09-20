@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cnms_fom import __version__
 from cnms_fom.config import get_settings
-from cnms_fom.routers import bo, fom, health, materials, modalfit, pilot, rag
+from cnms_fom.routers import bo, cards, fom, health, materials, modalfit, pilot, rag
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +88,11 @@ app = FastAPI(
             "assistant. Local via Ollama by default; Anthropic by explicit opt-in.",
         },
         {
+            "name": "cards",
+            "description": "Knowledge cards: accumulated concept pages, source summaries, "
+            "findings, and open questions, linked by typed edges.",
+        },
+        {
             "name": "modalfit",
             "description": "Multi-technique co-refinements (SE/SPR/QCM/XRR/NR) as measurement "
             "records, and cross-technique agreement.",
@@ -111,6 +116,7 @@ app.include_router(materials.router)
 app.include_router(fom.router)
 app.include_router(rag.router)
 app.include_router(modalfit.router)
+app.include_router(cards.router)
 app.include_router(bo.router)
 app.include_router(pilot.router)
 

@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     #  model within the same call instead of returning nothing.
     anthropic_refusal_fallbacks: bool = True
 
+    # --- Corpus storage -----------------------------------------------------
+    #  Where uploaded PDFs land. Under docker-compose ./data is mounted at
+    #  /app/data, so the same path works inside and outside the container.
+    corpus_dir: str = "data/pdfs"
+    #  Cap on one uploaded file. A 200 MB scan is almost always a mis-drag, and
+    #  the failure without a cap is an OOM rather than a message.
+    max_upload_mb: int = 100
+
     # --- Research assistant ------------------------------------------------
     #  Tool-call budget for one assistant turn. Past this the model is usually
     #  re-searching a corpus that does not hold the answer, and a data gap is

@@ -49,6 +49,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, embedding_column_type
 from .enums import (
+    CardRelation,
+    CardStatus,
+    CardType,
     ChatRole,
     CorrelationBlock,
     FitTechnique,
@@ -1397,6 +1400,167 @@ class ChatMessage(Base, TimestampMixin):
     latency_ms: Mapped[int | None] = mapped_column(Integer)
 
     session: Mapped[ChatSession] = relationship(back_populates="messages")
+
+
+# ---------------------------------------------------------------------------
+# Knowledge cards — a Dynamic Knowledge Repository over the corpus
+#
+# Ordinary retrieval re-derives an answer on every question and keeps nothing.
+# Ask the same thing twice and the model reasons from scratch, having learned
+# nothing in between.  The alternative, and the pattern these two tables
+# implement, is to do the integration work at *ingest* time: when a source
+# lands, the assistant updates the concept pages it touches, writes a summary of
+# the source, and flags where it contradicts what is already recorded.  Knowledge
+# then compounds instead of evaporating.
+#
+# What makes that safe here rather than dangerous is the review gate.  A card is
+# where a language model's synthesis of the corpus gets written down, and Sec.
+# 15.2 is explicit that such a synthesis is not evidence.  So an assistant-written
+# card is PROPOSED: returned, clearly labelled, and not something to build on. A
+# person promotes it to REVIEWED, and that promotion records who did it and
+# against which body text — so an edit after review makes the review stale rather
+# than silently inheriting it.
+#
+# The one thing a card is not, under any circumstance, is a route into the
+# analysis tables. There is no code path from a card to a PropertyValue.
+# ---------------------------------------------------------------------------
+
+
+class KnowledgeCard(Base, TimestampMixin):
+    """One page of accumulated knowledge, with its sources and its review state."""
+
+    __tablename__ = "knowledge_cards"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_card_slug"),
+        Index("ix_cards_type_status", "card_type", "status"),
+        Index("ix_cards_updated", "updated_at"),
+        #  Sec. 15.2 at the storage layer: a card cannot be marked reviewed
+        #  without a named person having reviewed it. "Reviewed by nobody" is
+        #  exactly the state that would let model output pass as checked.
+        CheckConstraint(
+            "status <> 'reviewed' OR reviewed_by IS NOT NULL",
+            name="ck_card_reviewed_has_reviewer",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="ck_card_confidence_unit_interval",
+        ),
+        CheckConstraint("length(trim(title)) > 0", name="ck_card_title_not_blank"),
+        CheckConstraint("length(trim(slug)) > 0", name="ck_card_slug_not_blank"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    #  Path-like and stable: "concepts/ald-window-hfo2", "sources/kim-2024".
+    #  It is the citation handle, so renaming one breaks every reference to it.
+    slug: Mapped[str] = mapped_column(String(256), nullable=False)
+    card_type: Mapped[CardType] = mapped_column(
+        enum_column(CardType, "card_type", length=16), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    #  Markdown. The whole point is that a person can read and correct it.
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+
+    status: Mapped[CardStatus] = mapped_column(
+        enum_column(CardStatus, "card_status", length=16),
+        nullable=False,
+        default=CardStatus.PROPOSED,
+    )
+    #  How much the author trusts the card, 0-1. Separate from status: a reviewed
+    #  card can still record genuine uncertainty about its own claim.
+    confidence: Mapped[float | None] = mapped_column(Float)
+    tags: Mapped[list | None] = mapped_column(JSONType)
+
+    #  [{"kind": "document", "document_id": 3, "page": 12, "doi": "..."},
+    #   {"kind": "fit_record", "fit_record_id": 7}, ...]
+    #  A card making a factual claim with an empty sources list is an assertion,
+    #  not knowledge, and ``knowledge.cards.review`` refuses to sign one off.
+    sources: Mapped[list | None] = mapped_column(JSONType)
+
+    #  "assistant" or a person's name. Which it is changes how the card should be
+    #  read, so it is recorded rather than inferred from the status.
+    authored_by: Mapped[str] = mapped_column(String(128), nullable=False, default="assistant")
+    reviewed_by: Mapped[str | None] = mapped_column(String(128))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #  Hash of the body as it stood when reviewed. An edit afterwards makes the
+    #  review stale — without this, a card could be approved and then rewritten,
+    #  and would still read as checked.
+    reviewed_body_sha256: Mapped[str | None] = mapped_column(String(64))
+
+    supersedes_id: Mapped[int | None] = mapped_column(
+        ForeignKey("knowledge_cards.id", ondelete="SET NULL")
+    )
+
+    links_out: Mapped[list[CardLink]] = relationship(
+        back_populates="from_card",
+        cascade="all, delete-orphan",
+        foreign_keys="CardLink.from_card_id",
+    )
+    links_in: Mapped[list[CardLink]] = relationship(
+        back_populates="to_card",
+        foreign_keys="CardLink.to_card_id",
+    )
+
+    @property
+    def review_is_stale(self) -> bool:
+        """True when the body changed after the card was reviewed."""
+        import hashlib
+
+        if self.status is not CardStatus.REVIEWED or not self.reviewed_body_sha256:
+            return False
+        current = hashlib.sha256((self.body or "").encode("utf-8")).hexdigest()
+        return current != self.reviewed_body_sha256
+
+    @property
+    def citable(self) -> bool:
+        """Whether anything may be built on this card.
+
+        Reviewed, not stale, and carrying at least one source. Everything else is
+        someone's notes — useful to read, not something to cite.
+        """
+        return (
+            self.status is CardStatus.REVIEWED
+            and not self.review_is_stale
+            and bool(self.sources)
+        )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<KnowledgeCard {self.slug} [{self.status.value}]>"
+
+
+class CardLink(Base, TimestampMixin):
+    """One typed, directed edge between two cards."""
+
+    __tablename__ = "card_links"
+    __table_args__ = (
+        UniqueConstraint("from_card_id", "to_card_id", "relation", name="uq_card_link"),
+        Index("ix_card_links_relation", "relation"),
+        #  A card related to itself is a data-entry slip, and it makes every
+        #  graph traversal a special case.
+        CheckConstraint("from_card_id <> to_card_id", name="ck_card_link_not_self"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    from_card_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_cards.id", ondelete="CASCADE"), index=True
+    )
+    to_card_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_cards.id", ondelete="CASCADE"), index=True
+    )
+    relation: Mapped[CardRelation] = mapped_column(
+        enum_column(CardRelation, "card_relation", length=16), nullable=False
+    )
+    #  Why the edge exists. For CONTRADICTS especially: "which claim, and on what
+    #  basis" is the whole content of the link, and an untyped pointer between two
+    #  cards that disagree is worse than no link at all.
+    note: Mapped[str | None] = mapped_column(Text)
+
+    from_card: Mapped[KnowledgeCard] = relationship(
+        back_populates="links_out", foreign_keys=[from_card_id]
+    )
+    to_card: Mapped[KnowledgeCard] = relationship(
+        back_populates="links_in", foreign_keys=[to_card_id]
+    )
 
 
 #  Registered last, once every mapped class above exists.  Importing ``models``

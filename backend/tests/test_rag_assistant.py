@@ -36,7 +36,7 @@ EXPORT = {
             "label": "hfo2_film",
             "material": "HfO2",
             "structural": {"thickness": {"value": 103.4, "min": 50.0, "max": 200.0, "vary": True}},
-            "xray": {"sld_real": {"value": 40.1, "min": 30.0, "max": 50.0, "vary": True}},
+            "xray": {"sld_real": {"value": 64.6, "min": 55.0, "max": 75.0, "vary": True}},
         },
         {"role": "substrate", "label": "silicon", "material": "Si"},
     ],
@@ -105,10 +105,13 @@ def db(tmp_path):
 
 def test_every_tool_has_a_schema_and_a_stable_order():
     """Tool definitions head a cached prompt prefix; reordering invalidates it."""
+    from cnms_fom.rag_backend.tools import write_tool_names
+
     names = [spec.name for spec in tool_specs()]
-    assert names == sorted(TOOLS)
+    assert names == sorted(set(TOOLS) - set(write_tool_names()))
     assert names == [spec.name for spec in tool_specs()]
-    for spec in tool_specs():
+    assert [s.name for s in tool_specs(allow_writes=True)] == sorted(TOOLS)
+    for spec in tool_specs(allow_writes=True):
         assert spec.description.strip()
         assert spec.input_schema["type"] == "object"
 
@@ -121,10 +124,18 @@ def test_tool_schemas_are_strict_for_anthropic():
         assert rendered["input_schema"]["additionalProperties"] is False
 
 
-def test_no_tool_writes_anything():
-    """Sec. 15.2 is enforced by not building the path, not by asking nicely."""
-    forbidden = ("promote", "create", "write", "update", "delete", "insert", "ingest")
-    assert not [name for name in TOOLS if any(word in name for word in forbidden)]
+def test_no_tool_reaches_an_analysis_table():
+    """Sec. 15.2 is enforced by not building the path, not by asking nicely.
+
+    The only writers are the two knowledge-card tools, and a card is quarantined
+    by construction — see test_only_knowledge_cards_are_writable_and_only_on_request.
+    """
+    from cnms_fom.rag_backend.tools import write_tool_names
+
+    forbidden = ("promote", "property", "material", "score", "experiment", "ingest")
+    assert not [name for name in TOOLS if any(word in name for word in forbidden)
+                and not name.startswith("lookup_")]
+    assert set(write_tool_names()) == {"write_card", "link_cards"}
 
 
 def test_unknown_tool_returns_an_error_the_model_can_read(db):
@@ -433,3 +444,218 @@ def test_optional_tool_arguments_stay_optional_under_strict_mode():
     compare = by_name["compare_fit_techniques"]["input_schema"]
     assert "layer_label" in compare["properties"]
     assert "layer_label" not in compare["required"]
+
+
+# --- write gating ----------------------------------------------------------
+
+
+def test_only_knowledge_cards_are_writable_and_only_on_request():
+    """The read-only rule is about analysis tables; cards are the narrow exception."""
+    from cnms_fom.rag_backend.tools import write_tool_names
+
+    assert write_tool_names() == ["link_cards", "write_card"]
+
+    read_only = {spec.name for spec in tool_specs()}
+    with_writes = {spec.name for spec in tool_specs(allow_writes=True)}
+    assert not (read_only & set(write_tool_names()))
+    assert with_writes - read_only == set(write_tool_names())
+
+    #  Nothing reaches an analysis table, whichever surface is offered.
+    forbidden = ("property", "material", "fit_record", "score", "promote")
+    assert not [
+        name for name in write_tool_names() if any(word in name for word in forbidden)
+    ]
+
+
+def test_a_write_tool_is_refused_when_writes_are_not_enabled(db):
+    """The schema is withheld, so a call means the model invented the name."""
+    result = run_tool(
+        db, "write_card", {"slug": "concepts/x", "title": "X", "body": "Y"}, allow_writes=False
+    )
+    assert "writes are not enabled" in result["error"]
+    from cnms_fom.db.models import KnowledgeCard
+
+    assert db.query(KnowledgeCard).count() == 0
+
+
+def test_a_card_written_by_the_assistant_lands_unreviewed(db):
+    result = run_tool(
+        db,
+        "write_card",
+        {
+            "slug": "concepts/ald-window-hfo2",
+            "title": "ALD window for HfO2",
+            "body": "GPC saturates at 0.98 A/cycle between 200 and 300 C [1].",
+            "sources": [{"kind": "document", "document_id": 1, "page": 7}],
+        },
+        allow_writes=True,
+    )
+    assert result["written"] is True
+    assert result["status"] == "proposed"
+    assert result["citable"] is False
+    assert "not citable" in result["reminder"]
+
+
+def test_the_agent_withholds_write_tools_by_default(db):
+    provider = ScriptedProvider(
+        [tool_reply("corpus_coverage", {}), text_reply("One ALD document is indexed.")]
+    )
+    ask(db, "What is indexed?", provider=provider)
+    offered = provider.calls[0]["tools"]
+    assert "write_card" not in offered
+    assert "search_cards" in offered
+    assert "read-only this turn" in provider.calls[0]["system"]
+
+
+def test_the_agent_offers_write_tools_when_asked(db):
+    provider = ScriptedProvider(
+        [tool_reply("corpus_coverage", {}), text_reply("Recorded what I found.")]
+    )
+    ask(db, "What is indexed?", provider=provider, allow_card_writes=True)
+    assert "write_card" in provider.calls[0]["tools"]
+    assert "writable this turn" in provider.calls[0]["system"]
+
+
+# --- BO tools --------------------------------------------------------------
+
+
+@pytest.fixture
+def campaign(db):
+    from cnms_fom.db.models import BoObservation, BoRun, BoSuggestion
+
+    run = BoRun(
+        name="hfo2_logic",
+        search_space={"substrate_temp_c": {"type": "float", "bounds": [200, 300]}},
+        acquisition="qLogEI",
+        objective_sense="max",
+        random_seed=7,
+    )
+    db.add(run)
+    db.flush()
+    #  Best improves, then stalls for three evaluations.
+    for value, feasible in ((-2.0, True), (-1.2, True), (-1.2, True), (None, False), (-1.5, True)):
+        db.add(
+            BoObservation(
+                bo_run_id=run.id,
+                parameters={"substrate_temp_c": 250},
+                objective_value=value,
+                is_feasible=feasible,
+            )
+        )
+    db.add(
+        BoSuggestion(
+            bo_run_id=run.id,
+            parameters={"substrate_temp_c": 300},
+            acquisition_value=0.01,
+            predicted_mean=-1.2,
+            predicted_std=0.4,
+        )
+    )
+    db.commit()
+    return run
+
+
+def test_bo_campaign_lists_and_reads(db, campaign):
+    listing = run_tool(db, "lookup_bo_campaign", {})
+    assert listing["campaigns"][0]["name"] == "hfo2_logic"
+
+    detail = run_tool(db, "lookup_bo_campaign", {"run_id": campaign.id})
+    assert detail["n_observations"] == 5
+    assert detail["n_infeasible"] == 1
+    assert detail["n_pending_suggestions"] == 1
+    assert "ln F" in detail["objective_scale_note"]
+
+
+def test_bo_history_reports_the_stall_not_just_the_points(db, campaign):
+    """'Is this working' is a question about the trend, not any single point."""
+    history = run_tool(db, "lookup_bo_history", {"run_id": campaign.id})
+    assert history["best_objective"] == pytest.approx(-1.2)
+    #  Best last improved at observation 2, and three feasible/infeasible
+    #  evaluations have happened since.
+    assert history["evaluations_since_best_improved"] == 3
+    assert history["n_infeasible"] == 1
+    assert len(history["trajectory"]) == 5
+    assert "clipping the optimum" in history["interpretation_note"]
+
+
+def test_bo_suggestions_expose_the_uncertainty(db, campaign):
+    result = run_tool(db, "lookup_bo_suggestions", {"run_id": campaign.id})
+    assert result["n_suggestions"] == 1
+    assert result["uncertainty_summary"]["max_std"] == pytest.approx(0.4)
+    assert "ln F scale" in result["interpretation_note"]
+
+
+def test_an_unapproved_objective_is_flagged_on_the_campaign(db, campaign):
+    """The campaign is optimising toward weights nobody has approved."""
+    from cnms_fom.db.models import FomDefinition
+
+    definition = FomDefinition(
+        name="logic", version=1, application="logic",
+        weights={"k": 0.5, "Eg": 0.5},
+        normalization={}, floor_eps=1e-3, approved=False,
+    )
+    db.add(definition)
+    db.flush()
+    campaign.fom_definition_id = definition.id
+    db.commit()
+
+    detail = run_tool(db, "lookup_bo_campaign", {"run_id": campaign.id})
+    assert "unapproved" in detail["objective_warning"]
+    assert "not a result" in detail["objective_warning"]
+
+
+def test_unknown_campaign_is_an_error_payload_not_an_exception(db):
+    assert "error" in run_tool(db, "lookup_bo_history", {"run_id": 999})
+
+
+# --- plausibility tools ----------------------------------------------------
+
+
+def test_plausibility_tool_grades_its_findings(db):
+    result = run_tool(
+        db,
+        "check_physical_plausibility",
+        {"values": {"k": 0.4, "Eg": 5.7}, "formula": "HfO2"},
+    )
+    assert result["physical"] is False
+    assert result["n_violations"] == 1
+    assert "never grounds to exclude" in result["note"]
+
+
+def test_plausibility_tool_explains_itself_when_given_nothing(db):
+    result = run_tool(db, "check_physical_plausibility", {"values": {}})
+    assert "usage" in result
+    assert "k" in result["checkable_keys"]
+
+
+def test_fit_plausibility_catches_an_sld_that_disagrees_with_its_density(db):
+    """The fixture's HfO2 layer has no density, so add one that does not match."""
+    from cnms_fom.db.models import FitLayer
+
+    layer = db.query(FitLayer).filter(FitLayer.role == "layer").one()
+    layer.density_g_cm3 = 4.0  # implies ~28e-6, not the stored 64.6
+    db.commit()
+
+    result = run_tool(db, "check_fit_plausibility", {"sample_id": SAMPLE})
+    assert result["n_layers_checked"] == 1
+    entry = result["layers"][0]
+    assert entry["physical"] is False
+    assert any("disagree" in f["message"] for f in entry["inconsistencies"])
+    assert result["all_physical"] is False
+
+
+def test_fit_plausibility_passes_a_consistent_layer(db):
+    from cnms_fom.db.models import FitLayer
+
+    layer = db.query(FitLayer).filter(FitLayer.role == "layer").one()
+    layer.density_g_cm3 = 9.1  # consistent with the stored 64.6e-6
+    db.commit()
+
+    result = run_tool(db, "check_fit_plausibility", {"sample_id": SAMPLE})
+    assert result["all_physical"] is True
+
+
+def test_fit_plausibility_on_an_unknown_sample_says_so(db):
+    result = run_tool(db, "check_fit_plausibility", {"sample_id": "NOPE"})
+    assert result["layers"] == []
+    assert "No ModalFit refinements" in result["note"]

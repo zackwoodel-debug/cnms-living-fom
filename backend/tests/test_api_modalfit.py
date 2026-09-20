@@ -40,7 +40,7 @@ EXPORT = {
                 "thickness": {"value": 103.4, "min": 50.0, "max": 200.0, "vary": True},
                 "roughness": {"value": 4.2, "min": 0.0, "max": 20.0, "vary": True},
             },
-            "xray": {"sld_real": {"value": 40.1, "min": 30.0, "max": 50.0, "vary": True}},
+            "xray": {"sld_real": {"value": 64.6, "min": 55.0, "max": 75.0, "vary": True}},
             "molecular": {"formula": "HfO2", "density": {"value": 9.1, "min": 8.0, "max": 10.0, "vary": True}},
         },
         {"role": "substrate", "label": "silicon", "material": "Si"},
@@ -203,7 +203,7 @@ def test_promotion_writes_measured_values_for_a_real_material(client, export_fil
 
     detail = client.get(f"/materials/{material['id']}").json()
     sld = next(p for p in detail["properties"] if p["property_key"] == "sld_xray")
-    assert sld["value"] == pytest.approx(40.1)
+    assert sld["value"] == pytest.approx(64.6)
     assert sld["provenance_tier"] == "measured"
     assert sld["thickness_nm"] == pytest.approx(10.34)
     assert "8.04 keV" in sld["method"]

@@ -115,3 +115,51 @@ class ChatRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
+
+
+class CardType(str, Enum):
+    """What kind of thing a knowledge card is about.
+
+    The type decides what the card is *for*, which decides what its links mean:
+    a CONCEPT fed by a SOURCE is a different relationship from a CONCEPT that
+    depends on another CONCEPT, and the graph is only useful if it knows which.
+    """
+
+    CONCEPT = "concept"      # a mechanism, a material family, a parameter window
+    SOURCE = "source"        # one paper or document, summarised
+    METHOD = "method"        # a procedure: how a thing is grown or measured
+    FINDING = "finding"      # something this lab observed, with its evidence
+    QUESTION = "question"    # an open question, with what would answer it
+
+
+class CardStatus(str, Enum):
+    """Whether a card has been read by a person yet.
+
+    The distinction is load-bearing, not bureaucratic. A card is where a language
+    model's synthesis of the corpus gets written down, and FOM_PROOF Sec. 15.2
+    means that synthesis is not evidence until someone has checked it against the
+    sources. PROPOSED cards are returned and clearly labelled rather than hidden —
+    hiding them would defeat the point — but nothing may be built on one.
+    """
+
+    PROPOSED = "proposed"      # written by the assistant; unreviewed
+    REVIEWED = "reviewed"      # a person checked it against its sources
+    SUPERSEDED = "superseded"  # replaced by a later card, kept for the audit trail
+
+
+class CardRelation(str, Enum):
+    """Typed edges between cards.
+
+    Typed rather than a bare link, for the reason the llm-wiki design gives: a
+    graph that only knows *that* two pages are related cannot answer "what does
+    this rest on?" — and ``CONTRADICTS`` is the one this platform most needs,
+    because an unresolved contradiction between two sources is a finding that a
+    flat link would bury.
+    """
+
+    FED_BY = "fed_by"            # concept <- source document
+    RELATES_TO = "relates_to"    # general association
+    DEPENDS_ON = "depends_on"    # this card's claim rests on that one
+    CONTRADICTS = "contradicts"  # the two cannot both be right
+    MEASURED_BY = "measured_by"  # concept <- a ModalFit fit or a property value
+    ANSWERS = "answers"          # finding -> question

@@ -27,6 +27,11 @@ There is also `cnms-fom ask "<question>"` on the CLI, which prints the evidence
 trail and exits **2** on a data gap — so a script can tell *answered* from *could
 not answer*.
 
+Documents get in through `POST /rag/ingest/upload` (multipart, several files at
+once, indexed immediately) or by putting them where the API can see them and
+calling `POST /rag/ingest` with the path. `docs/COSCIENTIST.md` walks the whole
+path from a PDF on disk to a cited answer.
+
 ---
 
 ## 2. The retrieval pipeline
@@ -111,25 +116,88 @@ none.
 
 ## 3. The assistant's tools
 
-All read-only. There is no tool that writes a property value, edits a fit, or
-creates a material — not as an unimplemented feature but as the design. The way
-to forbid a model-mediated path into the analysis tables is not to build one.
+Twenty tools. Everything that touches an **analysis table is read-only** — there is
+no tool that writes a property value, edits a fit, or creates a material, and that
+is the design rather than an unimplemented feature. The way to forbid a
+model-mediated path into the analysis tables is not to build one.
 
 | Tool | Returns |
 |---|---|
+| `search_cards` | knowledge cards matching a query, each with its `citable` flag |
+| `read_card` | one card with its typed links in both directions |
+| `card_graph` | nodes and typed edges; `orphans` names cards nothing links to |
+| `card_stats` | review backlog, stale reviews, unresolved contradictions |
 | `search_corpus` | graded, citable passages; `sufficient_evidence=false` when the corpus does not answer |
 | `corpus_coverage` | documents and chunks by technique — what a gap is actually caused by |
 | `list_samples_with_fits` | samples with stored refinements |
 | `list_sample_fits` | one sample's fits: stack, techniques, chi², which parameters were varied, and every caveat |
 | `compare_fit_techniques` | one parameter across every technique that determined it |
 | `fit_disagreements` | every cross-technique disagreement on a sample |
+| `check_physical_plausibility` | violations, inconsistencies, heuristic flags on a set of values |
+| `check_fit_plausibility` | the same checks over a sample's stored fit layers |
+| `lookup_bo_campaign` | search space, constraints, acquisition, objective, counts |
+| `lookup_bo_history` | best-so-far trajectory and `evaluations_since_best_improved` |
+| `lookup_bo_suggestions` | pending proposals with acquisition value and `predicted_std` |
 | `lookup_property_values` | stored values with full measurement context and source |
 | `descriptor_dictionary` | valid registry keys, units, transforms, caveats |
 | `lookup_fom_scores` | scores with status and definition version |
+| `write_card` *(opt-in)* | records a synthesis as a `proposed`, non-citable card |
+| `link_cards` *(opt-in)* | a typed edge; `contradicts` requires a note |
 
 `descriptor_dictionary` exists so the assistant uses the platform's vocabulary
 instead of inventing a plausible-looking key: "the band gap" resolves to `Eg`
 with its declared units, not to free text.
+
+### The two writers, and why they are the exception
+
+`write_card` and `link_cards` write, and only to knowledge cards. The exception is
+narrow and deliberate. A card is explicitly a *reading aid* — the assistant's
+synthesis, written down so it accumulates instead of evaporating — and it is
+quarantined by construction: it lands `proposed`, `citable` is false until a named
+person has checked it against a resolved source, and no code path leads from a card
+to a stored property value.
+
+They are also withheld by default. `tool_specs()` and `agent.ask` omit them unless
+`allow_card_writes=True`, and `run_tool` refuses them even if the model invents the
+name — so the default surface is entirely read-only.
+
+### Judging whether a number is physical
+
+`check_physical_plausibility` reports in three tiers, and keeping them apart is the
+whole value of it:
+
+- **violation** — the number cannot be true. A permittivity below 1 polarizes
+  against the field; a band offset above the gap puts the conduction band below the
+  valence band; an optical permittivity above the static one contradicts the fact
+  that the static response contains everything the optical one does.
+- **inconsistency** — two values that must agree and do not. The X-ray SLD versus
+  mass density check is the one that earns its keep: `SLD = rₑ·ρ·N_A·(Z/A)`, so for a
+  fixed composition they are one measurement. XRR is nearly degenerate in the two,
+  so a co-refinement that leaves both free will trade one against the other and
+  reproduce the curve while disagreeing with itself.
+- **heuristic** — a domain expectation with real exceptions. High k *and* a wide gap
+  together; a band offset under ~1 eV on silicon; an ALD growth-per-cycle above one
+  monolayer.
+
+A heuristic does not vote on `physical`, and the report says outright that it is
+never grounds to exclude a value. Sec. 2.3 governs exclusion, and "a heuristic
+disliked it" is not on that list.
+
+### Reading an optimization campaign
+
+The three BO tools exist because the raw tables do not answer the question people
+actually ask. `evaluations_since_best_improved` is not a column anywhere; neither is
+"are the suggestions still uncertain, or has the surrogate given up?".
+
+Two failure modes the assistant is told to watch, because both look like success
+from the inside: a **flat best-so-far** is not convergence if the suggestions still
+carry large `predicted_std` and cluster on a bound — a search space whose optimum
+lies outside its own bounds looks exactly like a converged campaign. And
+**infeasible observations carry information**: they bound the feasible region, so a
+mostly-infeasible campaign has a constraint problem, not a search problem.
+
+One scale trap the tools state explicitly: the surrogate models **ln F**, not F
+(Eq. 30), so a predicted mean of −0.7 against −1.4 is a factor of two in F.
 
 ### Structured records are never retrieved by similarity
 

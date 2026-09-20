@@ -19,13 +19,15 @@ filled by a plausible number, and a language model is very good at producing one
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from cnms_fom.config import get_settings
 from cnms_fom.db.base import get_db
+from cnms_fom.db.enums import SynthesisTechnique
 from cnms_fom.rag_backend import agent, memory
 from cnms_fom.rag_backend.chains import answer_question
 from cnms_fom.rag_backend.grading import retrieve_with_correction
@@ -48,6 +50,8 @@ from cnms_fom.schemas.rag import (
     ToolCallOut,
     TranscriptResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/rag", tags=["rag"])
 
@@ -363,3 +367,133 @@ def delete_conversation(session_key: str, db: Session = Depends(get_db)) -> None
 def assistant_config() -> AssistantConfigResponse:
     """What the assistant is configured to run on, and which tools it has."""
     return AssistantConfigResponse(**agent.available_models())
+
+
+@router.post("/ingest/upload", response_model=IngestResponse)
+def ingest_upload(
+    files: list[UploadFile] = File(description="One or more PDFs to add to the corpus."),
+    technique: SynthesisTechnique | None = Form(default=None),
+    doi: str | None = Form(default=None),
+    authors: str | None = Form(default=None),
+    year: int | None = Form(default=None),
+    source_url: str | None = Form(default=None),
+    title: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> IngestResponse:
+    """Upload PDFs and index them in one call.
+
+    This is the path for "here are some papers, read them". Files are written into
+    the configured corpus directory (``CORPUS_DIR``, default ``data/pdfs``) and
+    then chunked, embedded, and indexed with page-level citation locators, so
+    every later answer can point at a page.
+
+    Ingestion is idempotent by content hash, so re-uploading the same paper is a
+    no-op rather than a duplicate — which matters because the same PDF arrives
+    twice under two filenames more often than not.
+
+    ``technique`` is worth setting when you know it. Without it the partition is
+    guessed from the filename, and a guess puts the paper in the wrong corpus
+    slice, where a technique-filtered search will not find it.
+    """
+    settings = get_settings()
+    corpus_dir = Path(settings.corpus_dir)
+    try:
+        corpus_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            f"Cannot write to the corpus directory {corpus_dir}: {exc}. Set CORPUS_DIR to a "
+            "writable path.",
+        ) from exc
+
+    limit_bytes = settings.max_upload_mb * 1024 * 1024
+    results: list[dict] = []
+    saved: list[Path] = []
+
+    for upload in files:
+        name = Path(upload.filename or "upload.pdf").name
+        if not name.lower().endswith(".pdf"):
+            results.append(
+                {
+                    "filename": name,
+                    "error": "Only PDFs are ingested here. A .docx or .txt has to be converted "
+                    "first — the chunker records a page number for every passage, and a format "
+                    "without pages cannot produce a citation.",
+                }
+            )
+            continue
+
+        destination = corpus_dir / name
+        #  Never silently overwrite a file already in the corpus: two different
+        #  papers can share a filename, and the loser would vanish. Content-hash
+        #  deduplication happens at ingest, so a real duplicate is cheap.
+        if destination.exists():
+            stem, suffix = destination.stem, destination.suffix
+            counter = 2
+            while destination.exists():
+                destination = corpus_dir / f"{stem}__{counter}{suffix}"
+                counter += 1
+
+        written = 0
+        try:
+            with destination.open("wb") as handle:
+                while chunk := upload.file.read(1 << 20):
+                    written += len(chunk)
+                    if written > limit_bytes:
+                        raise ValueError(
+                            f"exceeds the {settings.max_upload_mb} MB limit "
+                            f"(MAX_UPLOAD_MB)"
+                        )
+                    handle.write(chunk)
+        except (ValueError, OSError) as exc:
+            destination.unlink(missing_ok=True)
+            results.append({"filename": name, "error": str(exc)})
+            continue
+        finally:
+            upload.file.close()
+
+        saved.append(destination)
+
+    for path in saved:
+        try:
+            results.append(
+                ingest_pdf(
+                    db,
+                    path,
+                    technique=technique,
+                    #  Per-file metadata only makes sense for a single upload;
+                    #  applying one DOI to a batch would mislabel every paper in it.
+                    title=title if len(saved) == 1 else None,
+                    doi=doi if len(saved) == 1 else None,
+                    authors=authors if len(saved) == 1 else None,
+                    year=year if len(saved) == 1 else None,
+                    source_url=source_url if len(saved) == 1 else None,
+                )
+            )
+            db.commit()
+        except ImportError as exc:
+            db.rollback()
+            raise HTTPException(
+                status.HTTP_501_NOT_IMPLEMENTED,
+                f"RAG extra not installed: {exc}. pip install -e '.[rag]'. The file was saved to "
+                f"{path}, so it can be ingested later without re-uploading.",
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 - one bad PDF must not lose the batch
+            db.rollback()
+            logger.warning("Ingest failed for %s: %s", path.name, exc)
+            results.append(
+                {
+                    "filename": path.name,
+                    "error": f"{exc}",
+                    "saved_to": str(path),
+                    "hint": "A scanned PDF with no text layer needs OCR before it can be "
+                    "chunked. The file was kept, so it can be re-ingested after OCR.",
+                }
+            )
+
+    stats = corpus_stats(db)
+    return IngestResponse(
+        ingested=results,
+        total_documents=stats["total_documents"],
+        total_chunks=stats["total_chunks"],
+    )

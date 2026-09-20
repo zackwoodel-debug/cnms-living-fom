@@ -46,6 +46,16 @@ Concretely:
 - **The research assistant cannot answer without evidence.** An answer produced
   without a single retrieval is discarded and replaced with an explicit data gap
   before it is returned. That is enforced in the loop, not requested in the prompt.
+- **An impossible number is distinguished from a surprising one.** Plausibility
+  reports in three tiers — violations (a permittivity below 1), inconsistencies (an
+  X-ray SLD that contradicts its own density), and heuristic flags. A heuristic
+  never votes on whether something is physical and is never grounds to exclude a
+  value, because a surprising result that survives scrutiny is the point of the
+  exercise. (Sec. 2.3)
+- **A knowledge card is not evidence until a person says so.** Cards accumulate
+  what has been worked out, and an assistant-written one is `proposed` and not
+  citable: review needs a named reviewer and a resolved source, and editing a
+  reviewed card makes the review stale automatically. (Sec. 15.2, 2.2)
 - **Two techniques measuring one quantity are two measurements.** A ModalFit
   co-refinement is stored as a measurement record, and where XRR and SE determine
   the same thickness, both determinations are kept and the disagreement is
@@ -99,7 +109,7 @@ Tests need nothing beyond the base install — no database, no network, no model
 server:
 
 ```bash
-pytest                                  # 324 tests
+pytest                                  # 398 tests
 ```
 
 ### The pilot loop
@@ -174,17 +184,18 @@ backend/cnms_fom/
   descriptors/        S from structures (pymatgen + matminer); tensor reduction
   fom_engine/         the protocol, made executable — see below
   rag_backend/        hybrid retrieval + the research assistant; local via Ollama
+  knowledge/          knowledge cards: typed concept pages with a review gate
   modalfit/           ModalFit co-refinements as measurement records
   bo_engine/          BoTorch loop over growth recipes
   cnms_integration/   instruments, experiments, run provenance  [placeholders]
   db/                 SQLAlchemy models, constraints, context identity
   ingest/             external materials-DB import (label parsing, staging)
   pilot/              HfO2-on-Si loop: stack export, XRR, property model
-  routers/            /materials  /fom  /rag  /modalfit  /bo  /pilot  /health
+  routers/            /materials /fom /rag /cards /modalfit /bo /pilot /health
 migrations/           Alembic revisions
 frontend/             React + Vite + TypeScript
-docs/                 FOM_PROTOCOL.md · DB_PROTOCOL.md · PILOT_WORKFLOW.md
-                      RESEARCH_ASSISTANT.md · MODALFIT_INTEGRATION.md · ARCHITECTURE.md
+docs/                 COSCIENTIST.md ← start here · FOM_PROTOCOL.md · DB_PROTOCOL.md
+                      PILOT_WORKFLOW.md · RESEARCH_ASSISTANT.md · MODALFIT_INTEGRATION.md
 scripts/              example loader, external ingester, compliance checker
 .github/workflows/    CI: science on SQLite, migrations on Postgres, pilot loop
 ```
@@ -206,6 +217,7 @@ makes the protocol testable without a database or a network.
 | `integrity.py` | Sec. 11 — covariance identity, null overlap, leakage |
 | `hypotheses.py` | Sec. 4.2 — pre-registered signs + fingerprint |
 | `physics.py` | Sec. 4.1, 6.1 — ε_static, Δε_m, C/A, EOT |
+| `plausibility.py` | Is this number possible? Violations, inconsistencies, heuristics |
 
 ---
 
@@ -223,9 +235,12 @@ makes the protocol testable without a database or a network.
 | `POST` | `/fom/integrity` | Observed vs. weight-overlap-implied correlation |
 | `GET` | `/fom/hypotheses` | Pre-registered signs and their fingerprint |
 | `POST` | `/rag/query` | Synthesis Q&A with page-level citations |
+| `POST` | `/rag/ingest/upload` | **Upload PDFs** and index them in one call |
 | `POST` | `/rag/search` | Retrieval only, with per-retriever diagnostics |
 | `POST` | `/rag/chat` | The research assistant: multi-step, with its evidence trail |
 | `GET` | `/rag/sessions/{key}` | A conversation transcript and the evidence behind it |
+| `GET` | `/cards` · `/cards/graph` · `/cards/stats` | Knowledge cards and their typed graph |
+| `POST` | `/cards/{slug}/review` | Sign a card off — the only way it becomes citable |
 | `POST` | `/modalfit/import` | Import a ModalFit export as a measurement record |
 | `POST` | `/modalfit/compare` | One parameter across every technique that determined it |
 | `POST` | `/modalfit/fits/{id}/promote` | Fitted values → `property_values`, gated |
@@ -238,15 +253,22 @@ makes the protocol testable without a database or a network.
 
 ## The research assistant
 
-Retrieval over two kinds of evidence: the document corpus, and the platform's own
-records — ModalFit co-refinements, property values, FOM scores.
+A co-scientist over everything the platform knows: the document corpus, ModalFit
+co-refinements, property values, FOM scores, and the optimizer's own history.
+**`docs/COSCIENTIST.md` is the walkthrough** — where PDFs go, what happens to them,
+and how each piece connects.
 
 ```bash
-cnms-fom ingest data/pdfs --technique ald
-cnms-fom import-fits data/fits --technique XRR
+# Give it the literature (or POST /rag/ingest/upload from /docs in a browser)
+curl -X POST localhost:8000/rag/ingest/upload \
+     -F 'files=@~/papers/kim-2024.pdf' -F 'technique=ald'
 
-cnms-fom ask "XRR and SE disagree on the HfO2 thickness for PILOT-07. \
-What does the literature say causes that in a high-k oxide on Si?" \
+# Give it your measurements
+cnms-fom import-fits data/fits
+
+# Ask it something it can only answer by combining the two
+cnms-fom ask "XRR and SE disagree on the HfO2 thickness for PILOT-07 by 38%. \
+Is either fit internally consistent, and what measurement would settle it?" \
   --sample-id HFO2-PILOT-07 --technique ald
 ```
 
@@ -263,12 +285,66 @@ number come from?" is answerable six months later. Structured records never come
 back through similarity search: an embedding of `103.4` sits close to one of
 `130.4`, and a number is exactly what a model reports without hedging.
 
+It runs twenty read-only tools and picks its own path through them, so "is this
+thickness trustworthy?" becomes: list the sample's fits, compare thickness across
+techniques, check whether either fit is internally consistent, then search the
+literature for the mechanism. Every tool call and its full result are returned and
+persisted, so "where did that number come from?" is answerable six months later.
+
+Three things it does that a search box does not:
+
+- **Judges whether a number is possible.** Three tiers, kept apart: a permittivity
+  below 1 is a *violation*; an X-ray SLD that contradicts its own density is an
+  *inconsistency* (and catches the XRR degeneracy that makes a co-refinement
+  disagree with itself); high k *and* a wide gap together is a *heuristic* flag. A
+  heuristic never overrides data.
+- **Reads the optimizer.** `evaluations_since_best_improved`, whether suggestions
+  still carry large uncertainty, whether they cluster on a bound — a search space
+  whose optimum lies outside its own bounds looks exactly like a converged campaign.
+  It also flags an unapproved FOM definition: uniform placeholder weights mean the
+  campaign is optimising toward a policy choice nobody has made.
+- **Writes what it worked out down.** Knowledge cards, opt-in per request, landing
+  `proposed` and not citable until someone signs them off.
+
 Local by default — `RAG_LLM_PROVIDER=ollama` keeps every excerpt on the machine,
 because the corpus is unpublished CNMS work. `anthropic` is available and opt-in;
 the trade-off is stated at the switch, logged at WARNING, and reported by
 `/health/ready`.
 
-→ `docs/RESEARCH_ASSISTANT.md`
+→ `docs/COSCIENTIST.md` · `docs/RESEARCH_ASSISTANT.md`
+
+## Knowledge cards
+
+Plain retrieval re-derives every answer and keeps nothing: ask the same question
+twice and the model reasons from scratch. Cards do the integration work when a
+source arrives instead — concept pages, source summaries, findings, and open
+questions, joined by typed edges.
+
+```
+concepts/ald-window-hfo2
+  ├─ fed_by      → sources/kim-2024
+  ├─ measured_by → findings/pilot07-thickness
+  └─ contradicts → concepts/ald-window-alt
+                     "0.98 vs 1.4 Å/cycle over the same 200-300 °C range"
+```
+
+Typed edges rather than plain links, because a graph that only knows *that* two
+pages are related cannot say what one rests on. `contradicts` is the one this
+platform needs most — an unresolved disagreement between sources is a finding — and
+it requires a note saying which claims conflict.
+
+What keeps an LLM-written page safe to keep is the review gate. A card is a
+synthesis, and Sec. 15.2 says a synthesis is not evidence: an assistant-written
+card is `proposed` and `citable` is false until a named person has checked it
+against a *resolved* source. Editing a reviewed card makes the review stale
+automatically, so nothing can be approved and then quietly rewritten. There is no
+path from a card into `property_values`.
+
+```bash
+cnms-fom cards list --status proposed     # the backlog that gates citability
+cnms-fom cards review concepts/ald-window-hfo2 --reviewed-by "Z. Woodel"
+cnms-fom cards stats                      # unresolved_contradictions is the one to watch
+```
 
 ## ModalFit co-refinements
 

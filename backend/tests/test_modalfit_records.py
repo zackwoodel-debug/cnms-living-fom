@@ -39,7 +39,7 @@ EXPORT = {
                 "roughness": {"value": 4.2, "min": 0.0, "max": 20.0, "vary": True},
             },
             "xray": {
-                "sld_real": {"value": 40.1, "min": 30.0, "max": 50.0, "vary": True},
+                "sld_real": {"value": 64.6, "min": 55.0, "max": 75.0, "vary": True},
                 "sld_imag": {"value": 1.2, "min": 0.0, "max": 5.0},
             },
             "molecular": {"formula": "HfO2", "density": {"value": 9.1, "min": 8.0, "max": 10.0, "vary": True}},
@@ -77,7 +77,7 @@ def test_import_stores_layers_datasets_and_free_parameters(db):
     #  sld_imag has a value and no vary flag: an input, not a result.
     assert "sld_imag" not in film.free_parameters
     assert set(film.free_parameters) == {"thickness", "roughness", "sld_real", "density"}
-    assert film.parameters["xray"]["sld_real"] == pytest.approx(40.1)
+    assert film.parameters["xray"]["sld_real"] == pytest.approx(64.6)
 
     dataset = db.query(FitDataset).one()
     assert dataset.technique.value == "XRR"

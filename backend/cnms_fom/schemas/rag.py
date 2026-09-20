@@ -266,4 +266,9 @@ class AssistantConfigResponse(BaseModel):
     ollama: dict
     anthropic: dict
     max_steps: int
-    tools: list[str]
+    tools: list[str] = Field(description="The read-only tool surface, always available.")
+    write_tools: list[str] = Field(
+        default_factory=list,
+        description="Opt-in per request, and they reach knowledge cards only.",
+    )
+    write_tools_note: str = ""

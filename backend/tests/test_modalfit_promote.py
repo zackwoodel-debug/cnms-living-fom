@@ -41,7 +41,7 @@ EXPORT = {
                 "roughness": {"value": 4.2, "min": 0.0, "max": 20.0, "vary": True},
             },
             "xray": {
-                "sld_real": {"value": 40.1, "min": 30.0, "max": 50.0, "vary": True},
+                "sld_real": {"value": 64.6, "min": 55.0, "max": 75.0, "vary": True},
                 "sld_imag": {"value": 1.2, "min": 0.0, "max": 5.0},
             },
             "molecular": {"formula": "HfO2", "density": {"value": 9.1, "min": 8.0, "max": 10.0, "vary": True}},
@@ -84,7 +84,7 @@ def test_plan_lists_what_is_eligible_and_why_the_rest_is_not(db):
     plan = promotion_plan(db, _import(db))
 
     eligible = {(item["registry_key"], item["value"]) for item in plan["eligible"]}
-    assert ("sld_xray", 40.1) in eligible
+    assert ("sld_xray", 64.6) in eligible
     assert ("rho", 9.1) in eligible
 
     #  sld_imag had no vary flag.
@@ -114,7 +114,7 @@ def test_promotion_writes_measured_rows_with_context(db, material):
     assert result["written"] == 2
 
     sld = db.query(PropertyValue).filter(PropertyValue.property_key == "sld_xray").one()
-    assert sld.value == pytest.approx(40.1)
+    assert sld.value == pytest.approx(64.6)
     assert sld.provenance_tier is ProvenanceTier.MEASURED
     assert sld.software == "ModalFit"
     #  Thickness rides along as context, in nm, converted from the stored Å.

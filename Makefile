@@ -3,7 +3,8 @@
 
 .PHONY: help install install-all test lint typecheck format \
         db-init db-migrate db-revision db-seed db-example serve frontend \
-        up down logs compliance ingest-survey import-fits compare-fits ask clean
+        up down logs compliance ingest-survey import-fits compare-fits ask \
+        cards clean
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -57,6 +58,9 @@ compare-fits:  ## Cross-technique agreement for one sample. SAMPLE=HFO2-PILOT-07
 
 ask:  ## Ask the research assistant. Q="your question"  (exit 2 = data gap)
 	cnms-fom ask "$(Q)"
+
+cards:  ## Knowledge cards awaiting review — the backlog that gates citability
+	cnms-fom cards list --status proposed
 
 serve:  ## Run the API with reload
 	cnms-fom serve --reload

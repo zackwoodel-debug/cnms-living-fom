@@ -29,7 +29,7 @@ NESTED = {
                 "thickness": {"value": 103.4, "min": 50.0, "max": 200.0, "vary": True},
                 "roughness": {"value": 4.2, "min": 0.0, "max": 20.0, "vary": True},
             },
-            "xray": {"sld_real": {"value": 40.1, "min": 30.0, "max": 50.0, "vary": True}},
+            "xray": {"sld_real": {"value": 64.6, "min": 55.0, "max": 75.0, "vary": True}},
             "molecular": {"formula": "HfO2", "density": {"value": 9.1}},
         },
         {"role": "substrate", "label": "silicon", "material": "Si", "xray": {"sld_real": 20.07}},

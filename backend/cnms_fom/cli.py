@@ -233,6 +233,7 @@ def _ask(args: argparse.Namespace) -> int:
                 techniques=techniques,
                 provider=provider,
                 max_steps=args.max_steps or settings.assistant_max_steps,
+                allow_card_writes=args.write_cards,
             )
             memory.record_turn(db, session, args.question, answer)
             session_key = session.session_key
@@ -264,6 +265,77 @@ def _ask(args: argparse.Namespace) -> int:
     print(f"\nconversation: {session_key}  ({answer.provider}/{answer.model}, {answer.latency_ms} ms)")
     #  Non-zero on a data gap, so a script can tell "answered" from "could not".
     return 0 if not answer.insufficient_context else 2
+
+
+def _cards(args: argparse.Namespace) -> int:
+    """List, show, review, or link knowledge cards.
+
+    The review workflow is the reason this is on the CLI at all: a card is the
+    assistant's synthesis until a person signs it off, and "show me the backlog,
+    read one, approve it" should not need a browser.
+    """
+    from cnms_fom.db.base import session_scope
+    from cnms_fom.knowledge.cards import (
+        ReviewRefused,
+        card_stats,
+        link_cards,
+        read_card,
+        review_card,
+        search_cards,
+    )
+
+    with session_scope() as db:
+        if args.action == "list":
+            result = search_cards(
+                db,
+                args.query,
+                card_type=args.type,
+                status=args.status,
+                citable_only=args.citable_only,
+                limit=args.limit,
+            )
+            if not result["cards"]:
+                print("No cards match.")
+                return 0
+            for card in result["cards"]:
+                mark = "OK " if card["citable"] else "-- "
+                print(f"{mark}{card['slug']:<44} [{card['status']:<10}] {card['title']}")
+            print(f"\n{result['n_cards']} card(s). 'OK' = reviewed, sourced, and current.")
+            return 0
+
+        if args.action == "show":
+            card = read_card(db, args.slug)
+            if not card.get("found"):
+                print(card.get("error"), file=sys.stderr)
+                return 1
+            print(json.dumps(card, indent=2, default=str))
+            return 0
+
+        if args.action == "stats":
+            print(json.dumps(card_stats(db), indent=2))
+            return 0
+
+        if args.action == "review":
+            try:
+                card = review_card(db, args.slug, reviewed_by=args.reviewed_by)
+            except (LookupError, ReviewRefused) as exc:
+                print(exc, file=sys.stderr)
+                return 1
+            print(f"{card.slug} reviewed by {card.reviewed_by}; citable = {card.citable}")
+            return 0
+
+        if args.action == "link":
+            try:
+                link = link_cards(
+                    db, args.slug, args.to, relation=args.relation, note=args.note
+                )
+            except (LookupError, ValueError) as exc:
+                print(exc, file=sys.stderr)
+                return 1
+            print(f"{args.slug} --{link.relation.value}--> {args.to}")
+            return 0
+
+    return 0
 
 
 def _dictionary(args: argparse.Namespace) -> int:
@@ -385,7 +457,45 @@ def main(argv: list[str] | None = None) -> int:
     ask_parser.add_argument("--provider", choices=["ollama", "anthropic"])
     ask_parser.add_argument("--model")
     ask_parser.add_argument("--max-steps", type=int)
+    ask_parser.add_argument(
+        "--write-cards",
+        action="store_true",
+        help="Let the assistant record what it worked out as a knowledge card. The card "
+        "lands unreviewed and not citable until a person signs it off.",
+    )
     ask_parser.set_defaults(func=_ask)
+
+    cards = subparsers.add_parser(
+        "cards", help="Knowledge cards: list, show, review, link, stats."
+    )
+    cards.add_argument(
+        "action", choices=["list", "show", "review", "link", "stats"]
+    )
+    cards.add_argument("slug", nargs="?", help="The card, for show / review / link.")
+    cards.add_argument("--query", help="Text to match, for list.")
+    cards.add_argument(
+        "--type",
+        choices=["concept", "source", "method", "finding", "question"],
+        help="Filter by card type.",
+    )
+    cards.add_argument(
+        "--status", choices=["proposed", "reviewed", "superseded"], help="Filter by status."
+    )
+    cards.add_argument(
+        "--citable-only",
+        action="store_true",
+        help="Only reviewed, sourced, non-stale cards.",
+    )
+    cards.add_argument("--limit", type=int, default=25)
+    cards.add_argument("--reviewed-by", help="Who is signing the card off. Required for review.")
+    cards.add_argument("--to", help="Target slug, for link.")
+    cards.add_argument(
+        "--relation",
+        choices=["fed_by", "relates_to", "depends_on", "contradicts", "measured_by", "answers"],
+        help="Edge type, for link.",
+    )
+    cards.add_argument("--note", help="Why the edge exists. Required for 'contradicts'.")
+    cards.set_defaults(func=_cards)
 
     serve = subparsers.add_parser("serve", help="Run the API with uvicorn.")
     serve.add_argument("--host")
