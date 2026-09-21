@@ -1402,6 +1402,169 @@ checks asserting that `CANONICAL_UNIT` and `FIELD_DIMENSION` cannot drift apart.
 
 ---
 
+## 10h. Truth-set v3, and the acceptance test finally passing
+
+### The suite could not see the thing the product is for
+
+Three changes had accumulated outside the project's own revert discipline — `grade-v3`
+(kept despite measuring worse), `lexical_relaxed` (neutral), and next the grading fix —
+all for the same reason: **the suite had no compound question.** Every one of its twelve
+cases asked for a single fact, so it could measure the cost of a change aimed at
+multi-part questions and none of the benefit. It also had no way to assert that a
+fabrication stays *absent*, so none of the §10d failures could become a regression case.
+
+Truth-set v3 adds five cases and one new assertion type:
+
+| case | category | what it pins |
+|---|---|---|
+| `compound_gpc_and_density` | compound_question | three facts, two documents, three pages, one question |
+| `compound_window_and_pressure` | compound_question | two conjuncts answered on two pages of one document |
+| `unit_variant_gpc` | unit_normalisation | gold in **nm/cycle** against a claim in Å/cycle |
+| `dimensional_negative_cycle_timing` | dimensional_guard | dose times must never be growth per cycle; `material` must never be numeric |
+| `negative_disagreement_density` | negative_disagreement | only one source states a density, so a disagreement must **not** be reported |
+
+`ForbiddenClaim` and `forbid_contradiction_fields` are what make the last two
+expressible. A forbidden claim **zeroes** its case rather than costing it a fraction:
+"an invented claim is worse than a missing one" (§10d), and a case that reproduces a known
+fabrication has failed whatever else it got right. `units_dimension` reuses
+`classify_unit`, so "6 s" and "6 seconds" are one rule rather than two spellings.
+
+`unit_variant_gpc` deserves its own note: the gold is deliberately written in the *other*
+unit, so a normalisation failure can never again masquerade as a recall failure. That
+confusion is what made `extraction_f1 = 0.397` uninterpretable for three sections.
+
+The suite is split **dev (9) / holdout (8)**, no overlap, nothing orphaned, and each split
+contains a compound case — otherwise a compound-question change could be tuned without
+ever being validated.
+
+### A regression the new cases immediately caught, in my own earlier work
+
+Adding them dropped every policy to ~0.67 offline. The cause was the zero-claims
+abstention rule from §10f: `StubExtractor` returns an empty claim list **by design**, so
+"passages retrieved but no claims in any of them" fired on every answerable case and the
+whole offline suite abstained. Worse, passing the stub explicitly made `extracting=True`,
+so the run reported `extraction_f1 = 0` **as if measured** — contradicting the stub's own
+docstring promise that extraction metrics come back unavailable.
+
+Two fixes: `StubExtractor` now declares `extracts = False`, and `extracting` means "a
+provider that actually extracts" rather than "a provider object exists". Offline baseline
+returned to 0.8989 with `extraction_f1 = n/a`, which is the honest report.
+
+Worth recording as a pattern rather than an incident: a guard that infers "the corpus is
+empty" from "no claims" needs to know whether extraction *could* have happened. That is
+the third time in this work that a fallback or guard was correct in isolation and wrong
+about its own preconditions (bugs 14, 19, and now this).
+
+### Per-conjunct grading, and the acceptance test
+
+`split_conjuncts` returns a compound question's separate asks **with the original first**,
+and the caller keeps the best grade. Two properties make it safe to enable:
+
+- **Monotone by construction.** The original is always graded, so a passage's grade can
+  rise and never fall.
+- **Escalation proportional to the problem.** Conjuncts are only tried for a passage
+  that would otherwise fall below `MIN_USEFUL_GRADE`. A single-clause question and a
+  passage already being kept cost exactly one call, as tests assert.
+
+Fragments carry the subject forward (`HfO2`, `ALD`) because a fragment with no material
+or technique is not gradeable, and fragments shorter than three words are discarded
+rather than graded. They are grading queries, not sentences.
+
+**On the real two-paper Postgres corpus, with `--policy per_conjunct`:**
+
+```
+CONTRADICTIONS (both kept; nothing averaged)
+  growth_per_cycle_ang: 37% relative spread between 1.42 A/cycle and 0.98 A/cycle;
+  context differs in chamber, precursor, technique, temperature_c, temperature_k,
+  which is the likely explanation and should be checked before treating this as a
+  conflict
+```
+
+**That is the acceptance test, and it passes.** Both values, both with document and page
+provenance, the spread computed rather than averaged, and the context difference named as
+the likely explanation instead of the disagreement being overstated as a conflict. The
+0.98 Å/cycle claim that §10e traced to a grade of 1 now reaches the brief.
+
+### What it costs, on dev and holdout separately
+
+```
+                    dev                      holdout
+              baseline  per_conjunct   baseline  per_conjunct
+overall_score   0.8169     0.7676        0.5911     0.6578
+extraction_f1   0.5451     0.3990        0.1369     0.1369
+page_precision  0.8571     0.5381        0.4833     0.4167
+doc_recall      0.8750     0.8750        0.8333     1.0000
+```
+
+**The two splits disagree, which is the split doing its job.** On dev the change is
+clearly worse — `page_precision` 0.857 → 0.538 — and buys nothing, because dev's
+documents were already being found (`doc_recall` unchanged). On holdout it is clearly
+better, because it recovers a document baseline misses entirely (`doc_recall` 0.833 →
+**1.000**) and that is worth more than the precision it costs there.
+
+The mechanism explains the split rather than averaging it away: rescuing a passage helps
+when a conjunct's *document* is otherwise missed, and costs precision when it is not.
+Holdout contains `compound_window_and_pressure`, whose second conjunct is answered on a
+page nothing surfaces; dev's compound case already had both documents.
+
+**Decision: keep it, opt-in, not the default** — which is what `grade_per_conjunct =
+False` already means. Against the stated rule, criteria 1–7 pass (0.98 Å/cycle recovered
+from real retrieved evidence, 1.42 retained, both compared with citations and correct
+page provenance, no dimensional false positive introduced, quote verification and
+unsupported-claim protection intact, abstention preserved). Criterion 8 — regression
+elsewhere measured and acceptable — is the one that fails *as a default*, and passes as an
+option. Critically this is **not** another unmeasured exception like `grade-v3`: the cost
+is measured on both splits and the benefit is demonstrated on the real corpus.
+
+Two honest caveats. The run reports **seven** contradictions, not one: `temperature_c`,
+`pressure_torr` and `thickness_nm` also differ between documents describing different
+reactors, and each is flagged with its context difference. The design says so explicitly —
+"context differs ... which is the likely explanation" — but the signal-to-noise on a
+compound question is poor, and a reader has to read seven entries to find the one that
+matters. And the recovered claims are marked `--` (not comparable) for missing
+`temperature_k`, so the disagreement is reported and still not usable as a stored-value
+comparison; §10c's `temperature_c` conversion covers the sources that state Celsius, and
+these two passages state a *range*, which correctly stays non-numeric.
+
+### Is grade-v3 vindicated? Split, and only just ahead.
+
+§10f kept `grade-v3` against the project's own revert discipline, arguing the suite could
+see its cost and none of its benefit. The suite can now see both. Measured by temporarily
+removing the compound rule and re-running:
+
+```
+                    dev                      holdout                 pooled (17)
+              grade-v1  grade-v3       grade-v1  grade-v3        v1       v3
+overall_score   0.7174    0.8169         0.6352    0.5911      0.6788   0.7106
+extraction_f1   0.4635    0.5451         0.2004    0.1369
+page_precision  0.8333    0.8571         0.7667    0.4833
+doc_recall      0.7500    0.8750         0.8333    0.8333
+```
+
+**Neither vindicated nor refuted — the evidence is split, along an explainable line.** On
+dev `grade-v3` is better on every metric, including `doc_recall` 0.750 → 0.875. On holdout
+`grade-v1` is better, and the gap is mostly `page_precision` (0.767 against 0.483): a more
+permissive grader keeps more passages, and where that does not recover a missing document
+it simply dilutes the window.
+
+Pooled over all seventeen cases, weighted by case count, `grade-v3` leads **0.711 to
+0.679**. Both splits count equally here rather than holdout counting for more, because
+`grade-v3` predates the split entirely — it was never tuned on either, so both are
+untuned estimators of it.
+
+**`grade-v3` stays, by a narrow and now-measured margin.** What has changed is not the
+decision but its standing: §10f's objection was that it was an *unmeasured* exception, and
+that objection is answered. The margin is 0.032 on seventeen synthetic cases, which is
+small enough that a larger or more realistic corpus could reverse it, and that is recorded
+as the condition for revisiting rather than as a settled result.
+
+The same measurement re-frames `per_conjunct` above: both changes make the grader more
+permissive, both buy recall on compound questions, and both pay in precision. They are the
+same trade at two different strengths — `grade-v3` mild enough to keep on by default,
+`per_conjunct` strong enough to keep off.
+
+---
+
 ## 11. Known limitations and deferred work
 
 **Measured, and significant:**
@@ -1474,6 +1637,16 @@ checks asserting that `CANONICAL_UNIT` and `FIELD_DIMENSION` cannot drift apart.
     because it currently has none and so can see the cost of such a change and none of
     its benefit. That is the same blind spot that made `grade-v3` an unmeasured exception
     (§10c) and made `lexical_relaxed` unmeasurable (§10f).
+
+    **Resolved in §10h.** The compound-question cases now exist, `per_conjunct` was
+    measured on both splits, and **the acceptance test passes on the real corpus**: the
+    1.42-vs-0.98 disagreement is reported with both citations and correct page provenance.
+    `per_conjunct` ships opt-in because it costs `page_precision` on dev; `grade-v3`'s
+    standing is settled as split-but-ahead rather than unmeasured.
+
+    What remains open here is narrower than the original claim: `decomposition_onset_c`
+    is the single genuine extraction miss, and the seven-contradiction noise on a compound
+    question is a reporting-precision problem rather than a recall one.
 
     Still true from before: `extract-v5` tried another prompt rule and measured worse, so
     the next attempt should not be one.
