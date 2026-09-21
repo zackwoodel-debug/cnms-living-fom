@@ -1,5 +1,5 @@
 {
-  "name": "tanstack_start_ts",
+  "name": "quark",
   "private": true,
   "sideEffects": false,
   "type": "module",
@@ -95,5 +95,6 @@
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.56.1",
     "vite": "8.1.5"
-  }
+  },
+  "description": "Conversational front end for CNMS Living FOM: threaded research sessions streamed from a local Ollama model."
 }

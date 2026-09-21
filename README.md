@@ -237,9 +237,10 @@ backend/cnms_fom/
   pilot/              HfO2-on-Si loop: stack export, XRR, property model
   routers/            /materials /fom /rag /cards /research /modalfit /bo /pilot
 migrations/           Alembic revisions
-frontend/             React + Vite + TypeScript
+frontend/             React + Vite + TypeScript — the original dashboard UI
 quark/                Quark, the chat interface — TanStack Start + Vite + Bun,
-                      streaming from local Ollama. See quark/README.md
+                      streaming from local Ollama. See quark/README.md.
+                      Separate app, separate toolchain; the two are not merged.
 docs/                 COSCIENTIST.md ← start here · FOM_PROTOCOL.md · DB_PROTOCOL.md
                       PILOT_WORKFLOW.md · RESEARCH_ASSISTANT.md · MODALFIT_INTEGRATION.md
                       AUTORESEARCH_AUDIT.md
