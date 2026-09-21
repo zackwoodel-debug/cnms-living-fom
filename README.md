@@ -190,6 +190,30 @@ survey of the CNMS oxide database actually found.
 
 ## Layout
 
+![System architecture: web app and API dispatching to six routers, which drive Evidence Research, Experimentation and Scientific Analysis, all converging on one measurement store.](docs/images/architecture.png)
+
+*The researcher reaches the system through the web app and API, which dispatch to six
+routers. Those drive three subsystems — **Evidence Research** (corpus ingest, hybrid
+retrieval, the research assistant, campaign governance, knowledge cards),
+**Experimentation** (the pilot workflow, CNMS instruments, the Bayesian optimiser) and
+**Scientific Analysis** (structural descriptors, the FOM engine, ModalFit records).
+`docs/ARCHITECTURE.md` goes through it component by component.*
+
+Two things are worth reading off that diagram, because they are the design rather than
+an accident of it.
+
+**Every arrow into the measurement store comes from the analysis or experiment layer —
+none comes from Evidence Research.** The research assistant reads the store and never
+writes to it. A literature claim is a record that a source said something, wired to the
+page where it said it; it never becomes a measurement. The only path from the corpus
+toward a live campaign runs through *Campaign Governance*, which validates knowledge
+cards and can at most **propose** a change that a human reviews.
+
+**Ollama sits off to one side, reached only for embeddings and queries.** Retrieval,
+grading and extraction are the only model calls, the corpus never leaves the machine by
+default, and the rest of the system — the FOM engine, the optimiser, the descriptors —
+is ordinary deterministic code that runs with no model server at all.
+
 ```
 backend/cnms_fom/
   descriptors/        S from structures (pymatgen + matminer); tensor reduction
