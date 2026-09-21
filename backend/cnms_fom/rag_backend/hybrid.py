@@ -24,6 +24,18 @@ and rewards a chunk that both retrievers liked over one that either loved alone.
 ``k`` (60 by convention) damps the top of each list so a single retriever cannot
 dominate on rank-1 alone.
 
+Scoring against the title as well as the text
+--------------------------------------------
+A table row cannot be scored on its own.  Measured on the benchmark's PLD case, the
+passage holding ``substrate_temperature 700 degC`` ranked **fourth** while a passage
+reading *"The material is LSMO, not SrTiO3"* ranked third — because the table row
+never mentions SrTiO3, PLD, or deposition.  All three are in its document's *title*,
+which the chunk text does not contain.
+
+So the lexical leg scores against ``title + text``, which lifted that passage to
+second.  The title is used for *scoring only*: the text returned, the quote stored,
+and the citation are the chunk's own, so nothing a reader checks is affected.
+
 Backends
 --------
 On Postgres, lexical search is ``to_tsvector``/``plainto_tsquery`` with
@@ -148,14 +160,26 @@ def _postgres_fulltext(
     #  not. ts_rank_cd (cover density) rather than ts_rank: it rewards query
     #  terms appearing close together, and in a process recipe a parameter and
     #  its units being adjacent is the whole signal.
-    vector_expr = text("to_tsvector('english', document_chunks.text)")
+    #  Title and text together, for the reason in the module docstring. The
+    #  expression must match migration 0007's functional index *exactly* or Postgres
+    #  will not use it — which is why this reads ``document_chunks.search_title``, a
+    #  trigger-maintained copy of the document's title on the chunk row, rather than
+    #  joining ``documents.title``: a functional index cannot span two tables.
+    #
+    #  If 0007 has not been applied the column is absent and this query raises, which
+    #  the caller below turns into a fallback to term overlap with a warning. That is
+    #  the right failure: slower, not wrong.
+    searchable = (
+        "to_tsvector('english', coalesce(document_chunks.search_title, '') "
+        "|| ' ' || document_chunks.text)"
+    )
+    vector_expr = text(searchable)
     query_expr = text("websearch_to_tsquery('english', :lexical_query)").bindparams(
         bindparam("lexical_query", query)
     )
-    rank_expr = text("ts_rank_cd(to_tsvector('english', document_chunks.text), "
-                     "websearch_to_tsquery('english', :lexical_query))").bindparams(
-        bindparam("lexical_query", query)
-    )
+    rank_expr = text(
+        f"ts_rank_cd({searchable}, websearch_to_tsquery('english', :lexical_query))"
+    ).bindparams(bindparam("lexical_query", query))
 
     statement = (
         session.query(DocumentChunk, Document, rank_expr.label("rank"))
@@ -212,7 +236,10 @@ def _python_term_overlap(
 
     scored: list[tuple[float, object, object]] = []
     for chunk, document in statement.all():
-        lowered = chunk.text.lower()
+        #  Title *and* text: a table row carries none of its document's subject, so
+        #  scoring the text alone ranks it below prose that merely mentions the
+        #  words. The title is scored, never returned.
+        lowered = f"{document.title or ''} {chunk.text}".lower()
         present = [term for term in terms if term in lowered]
         if not present:
             continue
@@ -354,17 +381,17 @@ def retrieval_diagnostics(
         "lexical_backend": "postgres_fulltext" if _is_postgres(session) else "python_term_overlap",
         "dense_error": dense_error,
         "vector": [
-            {"chunk_id": h.chunk_id, "citation": h.citation(), "similarity": h.similarity}
+            {"chunk_id": h.chunk_id, "citation": h.citation, "similarity": h.similarity}
             for h in dense
         ],
         "lexical": [
-            {"chunk_id": h.chunk_id, "citation": h.citation(), "rank_score": h.similarity}
+            {"chunk_id": h.chunk_id, "citation": h.citation, "rank_score": h.similarity}
             for h in lexical
         ],
         "fused": [
             {
                 "chunk_id": f.hit.chunk_id,
-                "citation": f.hit.citation(),
+                "citation": f.hit.citation,
                 "rrf_score": f.rrf_score,
                 "vector_rank": f.vector_rank,
                 "lexical_rank": f.lexical_rank,

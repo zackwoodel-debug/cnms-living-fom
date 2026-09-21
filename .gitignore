@@ -37,6 +37,10 @@ data/exports/*
 data/fits/*
 !data/fits/.gitkeep
 !data/fits/example_*.json
+
+# Rebuildable model-call cache for the autoresearch benchmark. Content-addressed,
+# so deleting it costs wall-clock on the next run and changes no score.
+data/cache/
 ollama/
 
 # OS / editor

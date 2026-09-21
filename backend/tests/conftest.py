@@ -58,3 +58,21 @@ def no_dense_retrieval(monkeypatch):
         "cnms_fom.rag_backend.embeddings.embed_query", _unavailable, raising=False
     )
     return _unavailable
+
+
+@pytest.fixture(autouse=True)
+def benchmark_cache_is_never_the_real_one(tmp_path, monkeypatch):
+    """Redirect the benchmark's model-call cache to a per-test temporary file.
+
+    Autouse and unconditional. The cache became persistent so a policy sweep could
+    reuse what an earlier policy already paid for, and that immediately made the test
+    suite write into ``data/cache/`` in the repo — which is both pollution and a real
+    correctness problem: a test that wants a model call to *fail* got a cache hit from
+    a different test's successful stub call, so the failure it was asserting never
+    happened. A cache that survives runs must never survive into a test.
+    """
+    monkeypatch.setattr(
+        "cnms_fom.research.benchmark.runner.DEFAULT_CACHE_PATH",
+        tmp_path / "benchmark_llm_cache.db",
+        raising=False,
+    )

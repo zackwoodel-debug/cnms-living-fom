@@ -38,8 +38,16 @@ class ChunkHit:
     doi: str | None = None
     source_url: str | None = None
 
+    @property
     def citation(self) -> str:
-        """A compact human-readable locator, e.g. ``ALD of HfO2, p. 12 (doi:10.x/y)``."""
+        """A compact human-readable locator, e.g. ``ALD of HfO2, p. 12 (doi:10.x/y)``.
+
+        A property rather than a method so that it matches
+        ``research.contracts.EvidenceItem.citation``. Two classes carrying the same
+        attribute, one callable and one not, is a trip hazard: a bare ``.citation``
+        on the method form silently formats a bound method into a string, which
+        produces a citation that looks like a bug report.
+        """
         parts = [self.document_title]
         if self.page is not None:
             parts.append(f"p. {self.page}")
@@ -58,7 +66,7 @@ class ChunkHit:
             "similarity": self.similarity,
             "doi": self.doi,
             "source_url": self.source_url,
-            "citation": self.citation(),
+            "citation": self.citation,
         }
 
 

@@ -29,7 +29,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from cnms_fom.db.enums import CardRelation, CardStatus, CardType
+from cnms_fom.db.enums import CardCategory, CardRelation, CardStatus, CardType
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,7 @@ def upsert_card(
     title: str,
     body: str,
     card_type: CardType | str = CardType.CONCEPT,
+    category: CardCategory | str | None = None,
     summary: str | None = None,
     sources: list | None = None,
     tags: list[str] | None = None,
@@ -132,6 +133,16 @@ def upsert_card(
             "nobody can check."
         )
     kind = CardType(card_type) if not isinstance(card_type, CardType) else card_type
+    purpose: CardCategory | None = None
+    if category is not None:
+        try:
+            purpose = CardCategory(category) if not isinstance(category, CardCategory) else category
+        except ValueError as exc:
+            raise CardError(
+                f"Unknown card category {category!r}. Expected one of "
+                f"{[c.value for c in CardCategory]}. The category is a closed set because the BO "
+                "context bridge selects cards by it."
+            ) from exc
     if confidence is not None and not (0.0 <= float(confidence) <= 1.0):
         raise CardError(f"confidence must be in [0, 1], got {confidence!r}.")
 
@@ -156,6 +167,7 @@ def upsert_card(
         card = KnowledgeCard(
             slug=slug,
             card_type=kind,
+            category=purpose,
             title=title.strip(),
             body=body,
             summary=summary,
@@ -174,6 +186,8 @@ def upsert_card(
     existing.title = title.strip()
     existing.body = body
     existing.card_type = kind
+    if purpose is not None:
+        existing.category = purpose
     if summary is not None:
         existing.summary = summary
     if resolved_sources:
@@ -291,6 +305,7 @@ def card_as_dict(card, *, include_body: bool = True) -> dict:
     payload = {
         "slug": card.slug,
         "card_type": card.card_type.value,
+        "category": card.category.value if card.category else None,
         "title": card.title,
         "summary": card.summary,
         "status": card.status.value,
@@ -380,6 +395,7 @@ def search_cards(
     query: str | None = None,
     *,
     card_type: CardType | str | None = None,
+    category: CardCategory | str | None = None,
     status: CardStatus | str | None = None,
     tags: list[str] | None = None,
     citable_only: bool = False,
@@ -406,6 +422,11 @@ def search_cards(
     if card_type:
         statement = statement.filter(
             KnowledgeCard.card_type == (CardType(card_type) if not isinstance(card_type, CardType) else card_type)
+        )
+    if category:
+        statement = statement.filter(
+            KnowledgeCard.category
+            == (CardCategory(category) if not isinstance(category, CardCategory) else category)
         )
     if status:
         statement = statement.filter(
@@ -544,3 +565,38 @@ def card_stats(db) -> dict:
             "number here: each one is a disagreement between sources that somebody has to settle."
         ),
     }
+
+
+#  Categories whose content the BO context bridge is allowed to read. A
+#  measurement caveat or a hypothesis is worth a scientist's attention and is not
+#  a source of search-space bounds, so the bridge does not look at them.
+BO_RELEVANT_CATEGORIES: tuple[CardCategory, ...] = (
+    CardCategory.PROCESS_WINDOW,
+    CardCategory.PROPERTY_PRIOR,
+    CardCategory.OPTIMIZATION_CONSTRAINT,
+)
+
+
+def citable_cards_for_bo(db, *, categories: tuple[CardCategory, ...] | None = None) -> list:
+    """Reviewed, non-stale, sourced cards in the categories the bridge may read.
+
+    The filtering happens here rather than at the call site so there is one
+    definition of "a card the optimizer may be influenced by". ``citable`` already
+    means reviewed, not stale, and carrying at least one source; this adds the
+    category restriction on top.
+    """
+    from cnms_fom.db.models import KnowledgeCard
+
+    wanted = categories or BO_RELEVANT_CATEGORIES
+    rows = (
+        db.query(KnowledgeCard)
+        .filter(
+            KnowledgeCard.status == CardStatus.REVIEWED,
+            KnowledgeCard.category.in_(list(wanted)),
+        )
+        .order_by(KnowledgeCard.slug)
+        .all()
+    )
+    #  `citable` is a Python property (it hashes the body to detect a stale
+    #  review), so the last filter cannot be pushed into SQL.
+    return [card for card in rows if card.citable]

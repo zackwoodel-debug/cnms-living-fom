@@ -56,6 +56,17 @@ Concretely:
   what has been worked out, and an assistant-written one is `proposed` and not
   citable: review needs a named reviewer and a resolved source, and editing a
   reviewed card makes the review stale automatically. (Sec. 15.2, 2.2)
+- **A literature extraction is not a measurement.** Extracted claims live in their
+  own table with their own tier vocabulary — a source saying "we measured 25" gives
+  a claim tier, never an analysis provenance tier — and there is no code path from
+  one to `property_values`. Every claim carries the page and the verbatim quote it
+  rests on, and a quote that is not in the passage is rejected. (Sec. 2.2, 15.2)
+- **Evidence reaches the optimizer only through a named person.** A proposed change
+  to a campaign is recorded, reviewed, and applied as three separate acts, each
+  requiring a name; the cards behind it are re-validated at all three, so a card
+  edited after approval makes the proposal stale rather than silently applying. A
+  proposal may *narrow* a search space and never widen one — widening is a claim
+  about what an instrument can physically reach, and no paper is a source for that.
 - **Two techniques measuring one quantity are two measurements.** A ModalFit
   co-refinement is stored as a measurement record, and where XRR and SE determine
   the same thickness, both determinations are kept and the disagreement is
@@ -185,17 +196,19 @@ backend/cnms_fom/
   fom_engine/         the protocol, made executable — see below
   rag_backend/        hybrid retrieval + the research assistant; local via Ollama
   knowledge/          knowledge cards: typed concept pages with a review gate
+  research/           the evidence loop: briefs, claims, BO context, benchmark
   modalfit/           ModalFit co-refinements as measurement records
   bo_engine/          BoTorch loop over growth recipes
   cnms_integration/   instruments, experiments, run provenance  [placeholders]
   db/                 SQLAlchemy models, constraints, context identity
   ingest/             external materials-DB import (label parsing, staging)
   pilot/              HfO2-on-Si loop: stack export, XRR, property model
-  routers/            /materials /fom /rag /cards /modalfit /bo /pilot /health
+  routers/            /materials /fom /rag /cards /research /modalfit /bo /pilot
 migrations/           Alembic revisions
 frontend/             React + Vite + TypeScript
 docs/                 COSCIENTIST.md ← start here · FOM_PROTOCOL.md · DB_PROTOCOL.md
                       PILOT_WORKFLOW.md · RESEARCH_ASSISTANT.md · MODALFIT_INTEGRATION.md
+                      AUTORESEARCH_AUDIT.md
 scripts/              example loader, external ingester, compliance checker
 .github/workflows/    CI: science on SQLite, migrations on Postgres, pilot loop
 ```
@@ -239,6 +252,9 @@ makes the protocol testable without a database or a network.
 | `POST` | `/rag/search` | Retrieval only, with per-retriever diagnostics |
 | `POST` | `/rag/chat` | The research assistant: multi-step, with its evidence trail |
 | `GET` | `/rag/sessions/{key}` | A conversation transcript and the evidence behind it |
+| `POST` | `/research/campaigns/{id}/brief` | An audited, read-only research brief |
+| `POST` | `/research/campaigns/{id}/context/{p}/apply` | The only path from evidence to the optimizer |
+| `POST` | `/research/benchmarks/run` | Score a retrieval policy against fixed cases |
 | `GET` | `/cards` · `/cards/graph` · `/cards/stats` | Knowledge cards and their typed graph |
 | `POST` | `/cards/{slug}/review` | Sign a card off — the only way it becomes citable |
 | `POST` | `/modalfit/import` | Import a ModalFit export as a measurement record |
@@ -311,9 +327,31 @@ because the corpus is unpublished CNMS work. `anthropic` is available and opt-in
 the trade-off is stated at the switch, logged at WARNING, and reported by
 `/health/ready`.
 
-Set `RAG_GRADER_MODEL` to something small. Relevance grading runs once per
-retrieved candidate and is a 0–3 classification; measured on this scaffold, a 1B
-grader cut a question from 267 s to 145 s and improved the answer.
+Grading and extraction have their own model settings — `RAG_GRADER_MODEL` and
+`RAG_EXTRACTION_MODEL` — because they are the whole cost of a brief and neither is a
+reasoning task. Grading runs once per retrieved candidate (a 0–3 classification) and
+extraction once per retained passage (structured output).
+
+**Use a ~7B coder model for both, not a 1B one.** Measured, on four passages with
+known grades:
+
+| model | grading | extraction | keeps the right passages? |
+|---|---|---|---|
+| `qwen2.5-coder:7b` | 1.6 s | 13.4 s | yes |
+| `llama3.1:8b` | 1.7 s | — | yes |
+| `qwen3:14b` | 16 s | 50 s | yes, 10x slower |
+| `gemma3:1b` | fastest | — | **no** |
+
+An earlier version of this file recommended a 1B grader on the strength of a 267 s →
+145 s speedup. That advice was wrong and is the reason for the table: a `gemma3:1b`
+grader scored the discriminating `1.42 Å/cycle` passage as **grade 1**, dropped it, and
+the brief reported **zero contradictions** on a corpus built to contain one. The 7B and
+14B models both grade it 3, keep it, and find the contradiction. The 7B is 10x faster
+than the 14B and retains the same passages, so it is the recommendation for both roles.
+
+`LLM_CACHE_ENABLED` (default on) caches grading and extraction by a hash of the passage
+text — content-addressed, so a changed prompt or model misses rather than serving a
+stale answer. On the benchmark it takes a full 12-case run from 279 s to 6 s.
 
 **Verified end to end** against a local model, which found two bugs now fixed: an
 ungrounded answer was flagged but not withheld, and two tools disagreed about what
@@ -380,6 +418,54 @@ parameter is silent, not in disagreement, and collapsing those two turns a
 non-result into a finding.
 
 → `docs/MODALFIT_INTEGRATION.md`
+
+---
+
+## The research loop
+
+Retrieval answers a question. The research loop turns an answer into something a
+campaign can act on — without letting it act on its own.
+
+```
+corpus + records → brief → proposed card → human review → campaign context → BO
+```
+
+A **brief** is read-only: it assembles evidence, extracts typed claims with their
+page and verbatim quote, finds contradictions arithmetically, lists what the corpus
+does *not* contain, and abstains when the evidence is thin. It also attaches the
+campaign's warnings — an unapproved objective, a stall with an uncertain surrogate,
+every suggestion piled on a bound — which are **computed from the records, not
+noticed by the model**. A warning that fired only when a model remembered it would
+not be a guardrail.
+
+```bash
+cnms-fom research brief "Does the literature agree on the growth per cycle \
+for HfO2 ALD from TDMAH and water?" --run-id 1 --technique ald   # exit 2 = abstained
+```
+
+Evidence reaches the optimizer through three separate acts, each requiring a name:
+
+```bash
+cnms-fom research context review 1 --by "Z. Woodel"
+cnms-fom research context apply  1 --by "Z. Woodel"   # records the fingerprint before/after
+cnms-fom research audit --run-id 1                    # the whole evidence trail
+```
+
+An **autoresearch benchmark** scores a retrieval policy against 12 fixed cases over
+a 24-document fixture corpus, offline, with no model server:
+
+```bash
+cnms-fom research benchmark --compare no_grading table_biased wide_pool
+```
+
+It found two things worth having: table/caption weighting is worth adopting
+(0.859 → 0.908, moving the tabular page to rank 1), and relevance grading is worth
+12 points of score. `unsupported_claim_rate` — the fraction of claims whose quote is
+not on the page they cite — is *subtracted* from the score, so a policy cannot buy a
+better number with confident fabrication.
+
+→ `docs/AUTORESEARCH_AUDIT.md` for the full audit, including the two bugs the
+benchmark's own first run exposed in itself.
 
 ---
 

@@ -13,7 +13,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cnms_fom import __version__
 from cnms_fom.config import get_settings
-from cnms_fom.routers import bo, cards, fom, health, materials, modalfit, pilot, rag
+from cnms_fom.routers import (
+    bo,
+    cards,
+    fom,
+    health,
+    materials,
+    modalfit,
+    pilot,
+    rag,
+    research,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +54,11 @@ Constraints the API enforces rather than documents:
   disagreement is reported. Nothing averages them (Sec. 2.1).
 * The research assistant answers only from tool results. An answer produced without
   a retrieval is replaced by an explicit data gap before it is returned.
+* A literature extraction is not a measurement. `/research` produces briefs, claims,
+  and proposals; none of them can reach `property_values` (Sec. 15.2). Evidence
+  influences the optimizer only through `/research/campaigns/{id}/context`, where a
+  proposal must be accepted by a named person before it is applied, and where it may
+  narrow a search space but never widen one.
 """
 
 
@@ -88,6 +103,11 @@ app = FastAPI(
             "assistant. Local via Ollama by default; Anthropic by explicit opt-in.",
         },
         {
+            "name": "research",
+            "description": "Evidence-grounded research loop: briefs, reviewed campaign context, "
+            "experiment summaries, and the autoresearch benchmark.",
+        },
+        {
             "name": "cards",
             "description": "Knowledge cards: accumulated concept pages, source summaries, "
             "findings, and open questions, linked by typed edges.",
@@ -117,6 +137,7 @@ app.include_router(fom.router)
 app.include_router(rag.router)
 app.include_router(modalfit.router)
 app.include_router(cards.router)
+app.include_router(research.router)
 app.include_router(bo.router)
 app.include_router(pilot.router)
 

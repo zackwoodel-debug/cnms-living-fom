@@ -41,6 +41,35 @@ class Settings(BaseSettings):
     #  scaffold: grading 7 candidates took 173 s on a 14B reasoning model and 29 s
     #  on a 1B one, for the same decisions. Unset means use the chat model.
     rag_grader_model: str | None = None
+    #  Optional model for claim extraction, which runs once per retrieved passage.
+    #  Extraction is structured output — read a passage, emit JSON — not reasoning,
+    #  and a reasoning model spends its budget deliberating about the schema.
+    #  Measured on this scaffold: a 14B reasoning model took 90-250 s *per passage*,
+    #  so six passages is a quarter of an hour for one brief. Unset means use the
+    #  chat model.
+    rag_extraction_model: str | None = None
+
+    # --- per-passage call cache and concurrency ---------------------------
+    #  Grading and extraction call a model once per passage and are together
+    #  essentially the whole cost of a brief. Both are pure functions of their
+    #  input, so both are cached by a hash of the content that was sent — see
+    #  rag_backend/cache.py. The cache holds no measurement and clearing it costs
+    #  only time.
+    llm_cache_enabled: bool = True
+    #  How many per-passage calls to run at once. Independent, so the output is
+    #  identical either way.
+    #
+    #  Measured against one local Ollama instance running qwen3:14b: 7 grading calls
+    #  took 196.9 s serially and 179.2 s with four workers — **9%**, not the 4x the
+    #  call count suggests. A single model instance is compute-bound, so the server
+    #  time-slices concurrent requests rather than overlapping them. Parallelism pays
+    #  where latency dominates — a remote API, or several models — and barely moves a
+    #  saturated local one. The cache is what matters locally: the same 7 calls took
+    #  0.011 s warm.
+    #
+    #  Left at 4 because 9% is still free, and it becomes a real win the moment the
+    #  provider is remote.
+    llm_max_parallel: int = 4
 
     # --- Anthropic (only used when rag_llm_provider == "anthropic") -------
     #  Left unset by default. When it is unset the SDK resolves credentials

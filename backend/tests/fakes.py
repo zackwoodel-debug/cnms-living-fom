@@ -124,3 +124,139 @@ def text_reply(text: str) -> ChatResult:
 
 def refusal_reply(category: str = "cyber") -> ChatResult:
     return ChatResult(text="", stop_reason="refusal", refused=True, refusal_category=category)
+
+
+class ResearchProvider:
+    """A scripted provider for the research loop: grades, extracts, interprets.
+
+    Routes on the system prompt rather than the message, because the three calls
+    the loop makes are distinguishable by which prompt they carry and nothing else.
+    Every reply is deterministic, so a brief's fingerprint is stable across runs —
+    which is what lets the benchmark tell a policy change from noise.
+    """
+
+    name = "research-stub"
+    model = "test-research"
+
+    def __init__(
+        self,
+        *,
+        grade: int = 3,
+        claims: list[dict] | None = None,
+        claims_by_page: dict[int, list[dict]] | None = None,
+        statements: list[dict] | None = None,
+        actions: list[str] | None = None,
+        rewrite: str | None = None,
+        malformed_extraction: bool = False,
+        refuse_interpretation: bool = False,
+        raise_on_extraction: bool = False,
+    ) -> None:
+        self.grade = grade
+        self.claims = claims if claims is not None else []
+        self.claims_by_page = claims_by_page or {}
+        self.statements = statements
+        self.actions = actions
+        self.rewrite = rewrite
+        self.malformed_extraction = malformed_extraction
+        self.refuse_interpretation = refuse_interpretation
+        self.raise_on_extraction = raise_on_extraction
+        self.calls: list[str] = []
+
+    def send(self, system, messages, *, tools=None, temperature: float = 0.0) -> ChatResult:  # noqa: ARG002
+        body = " ".join(str(m.get("content", "")) for m in messages)
+
+        if "You grade whether a retrieved passage" in system:
+            self.calls.append("grade")
+            return ChatResult(
+                text=json.dumps({"grade": self.grade, "reason": "stub"}),
+                model=self.model, provider=self.name,
+            )
+
+        if "You rewrite a failed search query" in system:
+            self.calls.append("rewrite")
+            return ChatResult(
+                text=json.dumps({"query": self.rewrite}) if self.rewrite else "{}",
+                model=self.model, provider=self.name,
+            )
+
+        if "You extract quantitative claims" in system:
+            self.calls.append("extract")
+            if self.raise_on_extraction:
+                raise RuntimeError("extraction backend unreachable")
+            if self.malformed_extraction:
+                return ChatResult(text="I found some numbers, roughly.",
+                                  model=self.model, provider=self.name)
+            #  Page-specific claims let a test build a real contradiction between
+            #  two documents rather than one document disagreeing with itself.
+            payload = self.claims
+            for page, page_claims in self.claims_by_page.items():
+                if f"p. {page}" in body:
+                    payload = page_claims
+                    break
+            return ChatResult(text=json.dumps({"claims": payload}),
+                              model=self.model, provider=self.name)
+
+        if "interpretation section of a research brief" in system:
+            self.calls.append("interpret")
+            if self.refuse_interpretation:
+                return ChatResult(text="", refused=True, refusal_category="other",
+                                  model=self.model, provider=self.name)
+            return ChatResult(
+                text=json.dumps({
+                    "statements": self.statements
+                    if self.statements is not None
+                    else [{"kind": "interpretation", "text": "The sources differ by reactor."}],
+                    "proposed_actions": self.actions
+                    if self.actions is not None
+                    else ["Measure both substrate preparations on one tool."],
+                }),
+                model=self.model, provider=self.name,
+            )
+
+        self.calls.append("other")
+        return ChatResult(text="{}", model=self.model, provider=self.name)
+
+
+class SummaryProvider:
+    """Scripted provider for the experiment-summary path."""
+
+    name = "summary-stub"
+    model = "test-summary"
+
+    def __init__(
+        self,
+        *,
+        statements: list[dict] | None = None,
+        open_questions: list[str] | None = None,
+        next_question: str | None = "Does the interlayer explain the discrepancy?",
+        refuse: bool = False,
+        malformed: bool = False,
+    ) -> None:
+        self.statements = statements if statements is not None else [
+            {"kind": "evidence", "text": "The run returned ln F = -1.20."},
+            {"kind": "interpretation", "text": "The surrogate was optimistic in this region."},
+            {"kind": "proposal", "text": "Repeat at the same recipe to separate noise from bias."},
+        ]
+        self.open_questions = open_questions if open_questions is not None else [
+            "Is the interfacial oxide thicker than the model assumes?"
+        ]
+        self.next_question = next_question
+        self.refuse = refuse
+        self.malformed = malformed
+        self.calls: list[str] = []
+
+    def send(self, system, messages, *, tools=None, temperature: float = 0.0) -> ChatResult:  # noqa: ARG002
+        self.calls.append("summarise")
+        if self.refuse:
+            return ChatResult(text="", refused=True, refusal_category="other",
+                              model=self.model, provider=self.name)
+        if self.malformed:
+            return ChatResult(text="It went fine, I think.", model=self.model, provider=self.name)
+        return ChatResult(
+            text=json.dumps({
+                "statements": self.statements,
+                "open_questions": self.open_questions,
+                "next_question": self.next_question,
+            }),
+            model=self.model, provider=self.name,
+        )

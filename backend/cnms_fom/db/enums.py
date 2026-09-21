@@ -163,3 +163,109 @@ class CardRelation(str, Enum):
     CONTRADICTS = "contradicts"  # the two cannot both be right
     MEASURED_BY = "measured_by"  # concept <- a ModalFit fit or a property value
     ANSWERS = "answers"          # finding -> question
+
+
+class ClaimTier(str, Enum):
+    """How a *literature* claim came to be, as the source describes it.
+
+    Deliberately **not** :class:`ProvenanceTier`, and the separation is the whole
+    point.  ``ProvenanceTier`` labels a value that has entered the analysis tables
+    and is eligible for a score; this labels a number an extraction pulled out of
+    a PDF.  A paper reporting "k = 25" gives us ``REPORTED`` — we know a human
+    wrote it down, and nothing more.  Collapsing the two vocabularies would let a
+    literature value inherit ``MEASURED`` on a type coercion, which is precisely
+    the confusion FOM_PROOF Sec. 2.2 exists to prevent.
+
+    ``MEASURED`` and ``FITTED`` appear here only to record what the *source*
+    claimed about its own number.  They confer nothing: a claim at any tier is
+    still a candidate, and the route into ``property_values`` runs through a
+    person, not through this enum.
+    """
+
+    REPORTED = "reported"        # the source states it; no method recorded
+    MEASURED = "measured"        # the source says it measured it
+    CALCULATED = "calculated"    # the source says it computed it analytically
+    MODELED = "modeled"          # the source says it came from a simulation
+    FITTED = "fitted"            # the source says it came from fitting a model to data
+    UNKNOWN = "unknown"          # the source does not say
+
+
+class ClaimStatus(str, Enum):
+    """What has happened to an extracted claim since it was pulled out of a paper.
+
+    There is no ``accepted`` member, and that is not an omission.  Acceptance means
+    entering the analysis tables, which happens through ``PropertyValue`` with a
+    DOI, a page, and a human, and leaves this record behind as the provenance of
+    that decision rather than being promoted in place.
+    """
+
+    CANDIDATE = "candidate"        # extracted, unreviewed
+    CORROBORATED = "corroborated"  # a second independent source agrees
+    DISPUTED = "disputed"          # another source disagrees; both are kept
+    SUPERSEDED = "superseded"      # a better extraction of the same claim exists
+    REJECTED = "rejected"          # a reviewer found the extraction wrong
+
+
+class BriefStatus(str, Enum):
+    """Review state of a research brief."""
+
+    PROPOSED = "proposed"
+    REVIEWED = "reviewed"
+    REJECTED = "rejected"
+    #  The campaign or the corpus moved underneath it, so its conclusions describe
+    #  a state that no longer exists.
+    STALE = "stale"
+
+
+class ContextStatus(str, Enum):
+    """Lifecycle of a proposed change to a BO campaign's configuration.
+
+    ``APPLIED`` is reachable only from ``REVIEWED``.  Nothing a language model
+    produces can reach it directly, which is the single invariant this enum
+    exists to make representable.
+    """
+
+    PROPOSED = "proposed"
+    REVIEWED = "reviewed"
+    REJECTED = "rejected"
+    APPLIED = "applied"
+    SUPERSEDED = "superseded"
+    #  Approved, but the card that justified it has since been edited or the
+    #  campaign has changed, so the approval no longer covers what it approved.
+    STALE = "stale"
+
+
+class CardCategory(str, Enum):
+    """What a knowledge card is *about*, orthogonal to :class:`CardType`.
+
+    ``CardType`` says what shape the page is — a concept, a source summary, a
+    question.  This says which job it does in the research loop, and the two are
+    independent: a process window is a ``CONCEPT`` in shape and a
+    ``PROCESS_WINDOW`` in purpose.
+
+    A closed set rather than a tag, for the reason the rest of this module is
+    closed: the BO context bridge selects cards by category, and a free-text tag
+    would make that selection unenforceable at the storage layer.
+    """
+
+    PROCESS_WINDOW = "process_window"                # a growth window with its context
+    PROPERTY_PRIOR = "property_prior"                # an expected range for a property
+    MEASUREMENT_CAVEAT = "measurement_caveat"        # a reason to distrust a measurement
+    OPTIMIZATION_CONSTRAINT = "optimization_constraint"  # a region to avoid or prefer
+    HYPOTHESIS = "hypothesis"                        # a mechanism proposed, not shown
+    CONTRADICTION = "contradiction"                  # two sources that cannot both hold
+    EXPERIMENT_SUMMARY = "experiment_summary"        # what one run actually showed
+
+
+class StatementKind(str, Enum):
+    """Epistemic status of one sentence in generated output.
+
+    An experiment summary mixes three things that must not be read alike: what was
+    recorded, what someone thinks it means, and what to do next.  Labelling them
+    is cheaper than asking a reader to infer the boundary, and it is the boundary
+    people get wrong when a summary is quoted onward.
+    """
+
+    EVIDENCE = "evidence"              # traceable to a record or a cited passage
+    INTERPRETATION = "interpretation"  # a reading of that evidence
+    PROPOSAL = "proposal"              # a suggested action, resting on the above

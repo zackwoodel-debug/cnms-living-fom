@@ -94,7 +94,7 @@ def _search_corpus(session, *, query: str, techniques: list[str] | None = None, 
         "sufficient_evidence": outcome.sufficient,
         "passages": [
             {
-                "citation": hit.fused.hit.citation(),
+                "citation": hit.fused.hit.citation,
                 "technique": hit.fused.hit.technique,
                 "page": hit.fused.hit.page,
                 "doi": hit.fused.hit.doi,

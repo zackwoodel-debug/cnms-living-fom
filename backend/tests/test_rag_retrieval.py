@@ -208,15 +208,17 @@ def test_grading_reorders_by_grade_then_by_fusion_score(db):
     candidates = hybrid_search(db, "ALD window HfO2 growth per cycle", k=4)
     assert len(candidates) >= 2
 
-    graded = grade_and_rerank(GradingProvider(grade=3), "ALD window?", candidates)
+    graded, cost = grade_and_rerank(GradingProvider(grade=3), "ALD window?", candidates)
     assert [g.grade for g in graded] == [3] * len(candidates)
     assert all(g.useful for g in graded)
+    #  Without a db there is no cache, so every candidate cost a call.
+    assert cost == {"cached": 0, "called": len(candidates), "failed": 0}
 
 
 def test_an_unparseable_grade_fails_closed(db):
     """Grade 1 keeps the passage out of the answer but visible in the trail."""
     candidates = hybrid_search(db, "Nevot-Croce", k=2)
-    graded = grade_and_rerank(
+    graded, _ = grade_and_rerank(
         GradingProvider(malformed_grades=True), "what is it?", candidates
     )
     assert all(g.grade == 1 for g in graded)

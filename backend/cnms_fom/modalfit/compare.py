@@ -419,6 +419,44 @@ def cross_technique_report(session, sample_id: str, *, layer_label: str | None =
     }
 
 
+def fit_process_warnings(record) -> list[str]:
+    """Findings about how a fit was *run*, as opposed to what it found.
+
+    A clamped parameter and a fixed one are properties of the refinement, not of
+    the physics, so they belong here rather than in the plausibility checker.
+
+    Computed from the stored bounds rather than by reading ``describe_fit``'s
+    prose: matching words in generated text is how a detector silently stops
+    working when the wording is improved.
+    """
+    findings: list[str] = []
+    for layer in record.layers:
+        if layer.role != "layer":
+            continue
+        name = layer.label or layer.material or f"layer_{layer.layer_index}"
+        free = set(layer.free_parameters or [])
+
+        if not free:
+            findings.append(
+                f"On {name}, every parameter was held fixed. Those values are inputs to the fit, "
+                "not results of it."
+            )
+
+        for parameter in sorted(free):
+            bounds = (layer.bounds or {}).get(parameter) or {}
+            low, high = bounds.get("min"), bounds.get("max")
+            value = _value_for(layer, parameter)
+            if value is None or low is None or high is None or high <= low:
+                continue
+            tolerance = 1e-6 * (high - low)
+            if value <= low + tolerance or value >= high - tolerance:
+                findings.append(
+                    f"On {name}, {parameter}={value:g} finished on its bound [{low}, {high}]. It "
+                    "has not converged — it has been clamped by a number somebody typed."
+                )
+    return findings
+
+
 def describe_fit(record) -> str:
     """Render one fit as prose for a language model to read.
 

@@ -49,10 +49,15 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, embedding_column_type
 from .enums import (
+    BriefStatus,
+    CardCategory,
     CardRelation,
     CardStatus,
     CardType,
     ChatRole,
+    ClaimStatus,
+    ClaimTier,
+    ContextStatus,
     CorrelationBlock,
     FitTechnique,
     HypothesisOutcome,
@@ -1470,6 +1475,14 @@ class KnowledgeCard(Base, TimestampMixin):
     #  card can still record genuine uncertainty about its own claim.
     confidence: Mapped[float | None] = mapped_column(Float)
     tags: Mapped[list | None] = mapped_column(JSONType)
+    #  What job this card does in the research loop — a process window, a property
+    #  prior, a measurement caveat. Orthogonal to ``card_type``, which is the page's
+    #  shape: a process window is a CONCEPT in shape and a PROCESS_WINDOW in
+    #  purpose. A closed set rather than a tag because the BO context bridge selects
+    #  cards by category, and a free-text tag would make that unenforceable.
+    category: Mapped[CardCategory | None] = mapped_column(
+        enum_column(CardCategory, "card_category", length=32)
+    )
 
     #  [{"kind": "document", "document_id": 3, "page": 12, "doi": "..."},
     #   {"kind": "fit_record", "fit_record_id": 7}, ...]
@@ -1561,6 +1574,328 @@ class CardLink(Base, TimestampMixin):
     to_card: Mapped[KnowledgeCard] = relationship(
         back_populates="links_in", foreign_keys=[to_card_id]
     )
+
+
+# ---------------------------------------------------------------------------
+# The research loop: briefs, extracted claims, and proposed campaign context
+#
+# These three tables hold the *evidence layer*.  Nothing in them is a
+# measurement, and the schema is arranged so that saying otherwise would require
+# adding a column rather than setting one.
+#
+# ``ResearchBriefRecord`` is a document about the state of the evidence for one
+# question.  ``ExtractedClaimRecord`` is one number a source stated, wired to the
+# page it appeared on.  ``CampaignContextProposal`` is a requested change to a BO
+# campaign, which reaches ``applied`` only through a named reviewer.
+#
+# Two decisions worth stating.  First, claims get their own table rather than a
+# JSON column on the brief: a claim is the thing people will query — "what has
+# anyone reported for the permittivity of HfO2?" — and provenance kept in a blob
+# cannot be constrained, indexed, or audited.  Second, the claim tier is
+# ``ClaimTier`` and not ``ProvenanceTier``; see the enum docstrings for why
+# sharing that vocabulary would be the single most expensive shortcut available
+# here.
+# ---------------------------------------------------------------------------
+
+
+class ResearchBriefRecord(Base, TimestampMixin):
+    """One audited research brief: what was found, what was not, what is proposed."""
+
+    __tablename__ = "research_briefs"
+    __table_args__ = (
+        Index("ix_briefs_run_created", "bo_run_id", "created_at"),
+        Index("ix_briefs_status", "status"),
+        Index("ix_briefs_fingerprint", "fingerprint"),
+        CheckConstraint("length(trim(research_question)) > 0", name="ck_brief_has_question"),
+        #  Sec. 15.2 as a constraint: a brief cannot be marked reviewed without a
+        #  named reviewer, the same rule knowledge cards carry.
+        CheckConstraint(
+            "status <> 'reviewed' OR reviewed_by IS NOT NULL",
+            name="ck_brief_reviewed_has_reviewer",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    research_question: Mapped[str] = mapped_column(Text, nullable=False)
+
+    bo_run_id: Mapped[int | None] = mapped_column(ForeignKey("bo_runs.id", ondelete="SET NULL"))
+    experiment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("experiments.id", ondelete="SET NULL")
+    )
+    material_id: Mapped[int | None] = mapped_column(
+        ForeignKey("materials.id", ondelete="SET NULL")
+    )
+
+    #  Free text, because a brief is often written before the material has an
+    #  identity in this database — and Sec. 2.1 does not let us invent one.
+    material: Mapped[str | None] = mapped_column(String(128))
+    specimen_form: Mapped[str | None] = mapped_column(String(64))
+    target_property: Mapped[str | None] = mapped_column(String(64))
+    fom_definition: Mapped[str | None] = mapped_column(String(128))
+
+    status: Mapped[BriefStatus] = mapped_column(
+        enum_column(BriefStatus, "brief_status"), nullable=False, default=BriefStatus.PROPOSED
+    )
+    #  True when the assistant declined for want of evidence. Stored because an
+    #  abstention rate is a corpus-coverage metric, not a failure log.
+    abstained: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    #  Evidence, contradictions, gaps, labelled statements, and the tool trace.
+    #  These are the brief's narrative, read as a whole; claims are the part that
+    #  gets queried, and they live in their own table.
+    evidence: Mapped[list | None] = mapped_column(JSONType)
+    contradictions: Mapped[list | None] = mapped_column(JSONType)
+    data_gaps: Mapped[list | None] = mapped_column(JSONType)
+    statements: Mapped[list | None] = mapped_column(JSONType)
+    proposed_actions: Mapped[list | None] = mapped_column(JSONType)
+    proposed_card_slugs: Mapped[list | None] = mapped_column(JSONType)
+    warnings: Mapped[list | None] = mapped_column(JSONType)
+    tool_calls: Mapped[list | None] = mapped_column(JSONType)
+
+    model: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str | None] = mapped_column(String(32))
+    #  Which retrieval/extraction policy produced this. The benchmark compares
+    #  policies, so a brief that cannot name its own is not reproducible.
+    policy_version: Mapped[str | None] = mapped_column(String(64))
+    #  Hash of the substantive content, excluding timestamps and the trace.
+    fingerprint: Mapped[str | None] = mapped_column(String(64))
+
+    reviewed_by: Mapped[str | None] = mapped_column(String(128))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    claims: Mapped[list[ExtractedClaimRecord]] = relationship(
+        back_populates="brief", cascade="all, delete-orphan"
+    )
+    context_proposals: Mapped[list[CampaignContextProposal]] = relationship(
+        back_populates="brief"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<ResearchBrief #{self.id} [{self.status.value}] {self.research_question[:40]!r}>"
+
+
+class ExtractedClaimRecord(Base, TimestampMixin):
+    """One value a source stated, with the page it appeared on.
+
+    Not a measurement, and the columns are chosen so that it cannot be mistaken
+    for one: there is no ``provenance_tier``, no ``context_digest``, and no
+    relationship to ``FomScore``. Promotion into ``property_values`` is a separate,
+    human act that reads this row as provenance rather than converting it.
+    """
+
+    __tablename__ = "research_claims"
+    __table_args__ = (
+        Index("ix_claims_field", "field_name"),
+        Index("ix_claims_brief", "brief_id"),
+        Index("ix_claims_document", "document_id"),
+        #  Sec. 2.2: every claim is traceable. A row with neither a document id nor
+        #  a content hash points at nothing.
+        CheckConstraint(
+            "document_id IS NOT NULL OR content_sha256 IS NOT NULL",
+            name="ck_claim_has_a_source",
+        ),
+        CheckConstraint("length(trim(quote)) > 0", name="ck_claim_has_a_quote"),
+        CheckConstraint(
+            "model_confidence IS NULL OR (model_confidence >= 0 AND model_confidence <= 1)",
+            name="ck_claim_confidence_unit_interval",
+        ),
+        #  A converted number without its conversion recorded is not auditable.
+        CheckConstraint(
+            "normalized_value IS NULL OR length(trim(normalization_note)) > 0",
+            name="ck_claim_normalisation_explained",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    brief_id: Mapped[int | None] = mapped_column(
+        ForeignKey("research_briefs.id", ondelete="CASCADE")
+    )
+
+    field_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[float | None] = mapped_column(Float)
+    units: Mapped[str | None] = mapped_column(String(32))
+    value_text: Mapped[str | None] = mapped_column(Text)
+    normalized_value: Mapped[float | None] = mapped_column(Float)
+    normalized_units: Mapped[str | None] = mapped_column(String(32))
+    normalization_note: Mapped[str | None] = mapped_column(Text)
+
+    tier: Mapped[ClaimTier] = mapped_column(
+        enum_column(ClaimTier, "claim_tier"), nullable=False, default=ClaimTier.REPORTED
+    )
+    status: Mapped[ClaimStatus] = mapped_column(
+        enum_column(ClaimStatus, "claim_status"), nullable=False, default=ClaimStatus.CANDIDATE
+    )
+
+    #  The measurement context the source recorded: temperature, frequency,
+    #  precursor, chamber, substrate. A dict because the useful set differs per
+    #  field, and `missing_context` on the contract computes what is absent.
+    context: Mapped[dict | None] = mapped_column(JSONType)
+    #  Required context this claim lacks, computed at write time so the gap is
+    #  queryable rather than only derivable.
+    missing_context: Mapped[list | None] = mapped_column(JSONType)
+
+    # --- provenance, one row per claim -----------------------------------
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    content_sha256: Mapped[str | None] = mapped_column(String(64))
+    document_title: Mapped[str | None] = mapped_column(String(512))
+    page: Mapped[int | None] = mapped_column(Integer)
+    chunk_id: Mapped[int | None] = mapped_column(Integer)
+    #  The exact supporting text. Without it a wrong extraction is
+    #  indistinguishable from a right one.
+    quote: Mapped[str] = mapped_column(Text, nullable=False)
+    doi: Mapped[str | None] = mapped_column(String(256))
+    #  The remaining evidence items, when a claim rests on more than one passage.
+    evidence: Mapped[list | None] = mapped_column(JSONType)
+
+    #  Which model, prompt, and policy produced this extraction. An extraction is
+    #  only reproducible if it can name the thing that produced it.
+    extracted_by_model: Mapped[str | None] = mapped_column(String(64))
+    extracted_by_provider: Mapped[str | None] = mapped_column(String(32))
+    prompt_version: Mapped[str | None] = mapped_column(String(64))
+    model_confidence: Mapped[float | None] = mapped_column(Float)
+    extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    brief: Mapped[ResearchBriefRecord | None] = relationship(back_populates="claims")
+
+
+class CampaignContextProposal(Base, TimestampMixin):
+    """A requested change to a BO campaign, and the record of who allowed it.
+
+    The only path by which evidence may influence the optimizer. It carries the
+    campaign's configuration fingerprint before and after application, so "what
+    changed this campaign, and on whose authority" is answerable from one row.
+    """
+
+    __tablename__ = "campaign_context_proposals"
+    __table_args__ = (
+        Index("ix_context_run_status", "bo_run_id", "status"),
+        #  Sec. 15.2 at the storage layer, twice over: reviewing needs a reviewer,
+        #  and applying needs a reviewer *and* an applier. A proposal cannot walk
+        #  itself into a live campaign.
+        CheckConstraint(
+            "status NOT IN ('reviewed', 'applied') OR reviewed_by IS NOT NULL",
+            name="ck_context_reviewed_has_reviewer",
+        ),
+        CheckConstraint(
+            "status <> 'applied' OR applied_by IS NOT NULL",
+            name="ck_context_applied_has_applier",
+        ),
+        CheckConstraint(
+            "status <> 'applied' OR applied_at IS NOT NULL",
+            name="ck_context_applied_has_timestamp",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bo_run_id: Mapped[int] = mapped_column(
+        ForeignKey("bo_runs.id", ondelete="CASCADE"), index=True
+    )
+    brief_id: Mapped[int | None] = mapped_column(
+        ForeignKey("research_briefs.id", ondelete="SET NULL")
+    )
+
+    status: Mapped[ContextStatus] = mapped_column(
+        enum_column(ContextStatus, "context_status"), nullable=False, default=ContextStatus.PROPOSED
+    )
+
+    #  {parameter: [lower, upper]} — narrowings only, enforced by the bridge.
+    recommended_bounds: Mapped[dict | None] = mapped_column(JSONType)
+    excluded_choices: Mapped[dict | None] = mapped_column(JSONType)
+    #  Advisory content. Written to the campaign's constraint notes on apply, never
+    #  into the acquisition function.
+    soft_priors: Mapped[list | None] = mapped_column(JSONType)
+    process_window_hints: Mapped[list | None] = mapped_column(JSONType)
+    uncertainty_notes: Mapped[list | None] = mapped_column(JSONType)
+    rationale: Mapped[str | None] = mapped_column(Text)
+
+    #  Cards this rests on, with the body hash each had at proposal time. Re-checked
+    #  on apply: a card edited in between makes its own review stale, and an
+    #  approval granted on the old text must not silently cover the new.
+    supporting_cards: Mapped[list | None] = mapped_column(JSONType)
+
+    proposed_by: Mapped[str] = mapped_column(String(128), nullable=False, default="assistant")
+    reviewed_by: Mapped[str | None] = mapped_column(String(128))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    applied_by: Mapped[str | None] = mapped_column(String(128))
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    #  Campaign configuration hash before and after. Two proposals applied in
+    #  sequence chain through these, so the campaign's history is reconstructable.
+    campaign_fingerprint_before: Mapped[str | None] = mapped_column(String(64))
+    campaign_fingerprint_after: Mapped[str | None] = mapped_column(String(64))
+    #  The constraints blob as it stood before application, so an apply can be
+    #  reversed without guessing what it replaced.
+    constraints_before: Mapped[dict | None] = mapped_column(JSONType)
+
+    brief: Mapped[ResearchBriefRecord | None] = relationship(back_populates="context_proposals")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<CampaignContextProposal #{self.id} run={self.bo_run_id} [{self.status.value}]>"
+
+
+# ---------------------------------------------------------------------------
+# Per-passage model-call cache
+#
+# The one table in this schema that is infrastructure rather than science.  It
+# records what was sent to a model and what came back, keyed by a hash of the
+# content — so a re-ingest that renumbers chunks cannot serve a stale answer, and an
+# edited passage misses automatically.  Correctness is a property of the key rather
+# than of an invalidation rule somebody has to remember.
+#
+# It holds no claim, no measurement, and nothing a person would cite.  Deleting it
+# costs time and nothing else, which is why it is one generic table instead of a
+# typed one per stage: the rest of this schema is typed because the protocol depends
+# on it, and here that reasoning does not apply.
+#
+# Why it matters: grading and extraction call a model once per passage and are
+# together essentially the whole cost of a brief — 18 of 19 calls, about 21 minutes
+# against 1.2 seconds for retrieval.  Extraction in particular is a pure function of
+# the passage, because its prompt does not contain the question, so a passage needs
+# extracting once ever.
+# ---------------------------------------------------------------------------
+
+
+class LlmCacheEntry(Base, TimestampMixin):
+    """One cached model call, addressed by the hash of what was sent."""
+
+    __tablename__ = "llm_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "kind", "cache_key", "model", "prompt_version", name="uq_llm_cache_entry"
+        ),
+        Index("ix_llm_cache_lookup", "kind", "cache_key", "model"),
+        Index("ix_llm_cache_last_used", "last_used_at"),
+        #  A closed set, because the kind is part of the key and a typo would
+        #  silently create a second cache that never hits.
+        CheckConstraint("kind IN ('extraction', 'grade')", name="ck_llm_cache_kind"),
+        CheckConstraint("hit_count >= 0", name="ck_llm_cache_hits_nonneg"),
+        CheckConstraint("length(cache_key) = 64", name="ck_llm_cache_key_is_sha256"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    #  sha256 of the passage (extraction) or of question + NUL + passage (grading).
+    #  Content-addressed rather than an id: see the comment above.
+    cache_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    #  Empty string rather than NULL, so the uniqueness constraint actually
+    #  constrains: in SQL, NULL != NULL, and two rows with a null prompt version
+    #  would both be insertable.
+    prompt_version: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    payload: Mapped[dict] = mapped_column(JSONType, nullable=False)
+
+    #  How many calls this row has avoided. The number worth quoting when asked
+    #  whether the cache is earning its keep.
+    hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<LlmCacheEntry {self.kind}/{self.model} {self.cache_key[:12]} hits={self.hit_count}>"
 
 
 #  Registered last, once every mapped class above exists.  Importing ``models``

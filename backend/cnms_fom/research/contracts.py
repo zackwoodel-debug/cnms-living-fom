@@ -1,0 +1,794 @@
+"""The typed shapes the research loop passes around.
+
+Dataclasses rather than Pydantic models, and rather than ORM rows, because these
+are the *domain* contracts: they are built by ``brief`` from tool output, validated
+here, and only then persisted or serialised.  Keeping them free of SQLAlchemy means
+the invariants below are testable without a database, which is the same reason
+``fom_engine`` depends on nothing heavier than numpy.
+
+Three invariants are enforced by construction, not by convention:
+
+``an extracted claim cannot present itself as a measurement``
+    :class:`ExtractedClaim` has no field that could be read as an analysis-table
+    tier.  ``tier`` is a :class:`ClaimTier` — what the *source* said about its own
+    number — and ``status`` has no ``accepted`` member.  There is no method on this
+    class that produces a ``PropertyValue``.
+
+``a claim without evidence is not a claim``
+    :meth:`ExtractedClaim.__post_init__` refuses one with no
+    :class:`EvidenceItem`, and an evidence item refuses to exist without a document
+    hash, a page, and the quote it rests on.  FOM_PROOF Sec. 2.2 wants provenance a
+    reader can follow; an extraction that cannot be checked against its page is
+    worse than no extraction, because it looks the same as a good one.
+
+``a proposed context change cannot loosen anything``
+    :meth:`ProposedBOContext.widening_violations` reports every bound that would
+    widen a live campaign's. The bridge refuses on a non-empty list. A literature
+    claim may narrow a search space — that is a scientist choosing to trust a
+    paper — but widening one past its instrument envelope is a physical claim about
+    a tool, which no paper can make.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
+from cnms_fom.db.enums import (
+    BriefStatus,
+    ClaimStatus,
+    ClaimTier,
+    ContextStatus,
+    StatementKind,
+)
+
+
+class ResearchContractError(ValueError):
+    """A research object cannot be built as described."""
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Evidence
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EvidenceItem:
+    """One retrieved passage, with everything needed to find it again.
+
+    ``content_sha256`` is here as well as ``document_id`` on purpose: an id is
+    only meaningful inside one database, and a brief outlives the row it was built
+    from. The hash identifies the document itself, so a claim remains checkable
+    after a re-ingest renumbers everything.
+    """
+
+    document_id: int | None
+    document_title: str
+    page: int | None
+    quote: str
+    content_sha256: str | None = None
+    chunk_id: int | None = None
+    doi: str | None = None
+    source_url: str | None = None
+    technique: str | None = None
+    #  How this passage was found: "vector", "lexical", "vector+lexical", "card",
+    #  "record". Kept because a passage only lexical search could reach says
+    #  something about the query that a relevance grade does not.
+    retrieval_method: str = ""
+    retrieval_rank: int | None = None
+    #  The 0-3 relevance grade, when grading ran.
+    grade: int | None = None
+    grade_reason: str = ""
+
+    def __post_init__(self) -> None:
+        if not (self.document_title or "").strip():
+            raise ResearchContractError("An evidence item needs a document title.")
+        if not (self.quote or "").strip():
+            raise ResearchContractError(
+                "An evidence item needs the quote it rests on. A citation without the "
+                "supporting text cannot be checked against its page, which makes a wrong "
+                "extraction indistinguishable from a right one."
+            )
+
+    @property
+    def citation(self) -> str:
+        parts = [self.document_title]
+        if self.page is not None:
+            parts.append(f"p. {self.page}")
+        if self.doi:
+            parts.append(f"doi:{self.doi}")
+        return ", ".join(parts)
+
+    @property
+    def is_locatable(self) -> bool:
+        """Whether a reader could actually go and check this.
+
+        A page number is the minimum. A title alone points at a document and not
+        at a claim, and a document is where a disagreement hides.
+        """
+        return self.page is not None and bool(self.document_id or self.content_sha256)
+
+    def as_dict(self) -> dict:
+        return {
+            "document_id": self.document_id,
+            "document_title": self.document_title,
+            "content_sha256": self.content_sha256,
+            "page": self.page,
+            "chunk_id": self.chunk_id,
+            "quote": self.quote,
+            "doi": self.doi,
+            "source_url": self.source_url,
+            "technique": self.technique,
+            "retrieval_method": self.retrieval_method,
+            "retrieval_rank": self.retrieval_rank,
+            "grade": self.grade,
+            "grade_reason": self.grade_reason,
+            "citation": self.citation,
+            "locatable": self.is_locatable,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Claims
+# ---------------------------------------------------------------------------
+
+#  Context fields a claim carries when the source records them. Mirrors the
+#  PropertyValue columns of FOM_PROOF Table 1, because a claim that is ever going
+#  to be compared with a stored value has to be describable in the same terms.
+CLAIM_CONTEXT_FIELDS: tuple[str, ...] = (
+    "material",
+    "polymorph",
+    "specimen_form",
+    "technique",
+    "substrate",
+    "electrode",
+    "interface",
+    "temperature_k",
+    #  Sources state growth temperatures in Celsius almost without exception. The
+    #  extractor records what the source wrote and never converts; the conversion to
+    #  temperature_k happens here, in code that can be audited and cannot arithmetic
+    #  its way to a plausible-looking wrong number.
+    "temperature_c",
+    "pressure_torr",
+    "frequency_hz",
+    "thickness_nm",
+    "precursor",
+    "oxidant",
+    "chamber",
+    "anneal",
+    "failure_criterion",
+    "method",
+    "software",
+    "xc_functional",
+)
+
+#  Context fields whose name declares a unit. A value in one of these has to be a
+#  number in *that* unit or the field is lying: a ``temperature_k`` holding
+#  "200 to 300 degC" would be read as 200-300 kelvin by anything that trusted the
+#  name, and a source stating a range in Celsius is exactly what an extractor
+#  produces. Observed from a live extraction, hence the guard.
+UNIT_BEARING_CONTEXT: dict[str, str] = {
+    "temperature_k": "kelvin",
+    "temperature_c": "degrees Celsius",
+    "pressure_torr": "torr",
+    "frequency_hz": "hertz",
+    "thickness_nm": "nanometres",
+    "area_cm2": "square centimetres",
+}
+
+#  Which context a claim needs before it is worth comparing with anything, per
+#  property key. Absence is reported, never filled in: Sec. 16 makes context part
+#  of what a value *is*, so a permittivity with no frequency is not a permittivity
+#  with a gap, it is an incomparable number.
+REQUIRED_CONTEXT: dict[str, tuple[str, ...]] = {
+    "k": ("temperature_k", "frequency_hz"),
+    "eps_inf": ("temperature_k",),
+    "eps_ionic": ("temperature_k",),
+    "Eg": ("method",),
+    "dEc": ("substrate", "method"),
+    "Ebd": ("thickness_nm", "electrode", "failure_criterion"),
+    "tan_delta": ("temperature_k", "frequency_hz"),
+    "kappa_th": ("temperature_k",),
+    "sld_xray": ("method",),
+    "sld_neutron": ("method",),
+    "growth_per_cycle_ang": ("technique", "temperature_k", "precursor", "chamber"),
+    "growth_rate_nm_min": ("technique", "temperature_k", "chamber"),
+}
+
+
+@dataclass
+class ExtractedClaim:
+    """One number (or statement) pulled out of a document, with its context.
+
+    Not a measurement. Not a candidate for arithmetic. A record that a source said
+    something, wired to the page where it said it.
+    """
+
+    #  A registry key when it maps onto one ("k", "Eg", "sld_xray"), otherwise a
+    #  descriptive name. Kept as free text rather than constrained to the registry
+    #  because a paper's most useful number is often one this platform has no key
+    #  for yet, and refusing to record it would lose it.
+    field_name: str
+    evidence: list[EvidenceItem]
+    value: float | None = None
+    units: str | None = None
+    value_text: str | None = None
+    #  Only set when a conversion was performed, and then always alongside the
+    #  original. A normalised value with no record of what it was normalised from
+    #  is a number nobody can audit.
+    normalized_value: float | None = None
+    normalized_units: str | None = None
+    normalization_note: str = ""
+    tier: ClaimTier = ClaimTier.REPORTED
+    status: ClaimStatus = ClaimStatus.CANDIDATE
+    context: dict[str, Any] = field(default_factory=dict)
+    #  The extracting model's own confidence. A model output, recorded as one, and
+    #  never a substitute for review: a confident extraction of a misread table is
+    #  the failure mode this field must not be allowed to mask.
+    model_confidence: float | None = None
+    extracted_by_model: str = ""
+    extracted_by_provider: str = ""
+    prompt_version: str = ""
+    extracted_at: datetime = field(default_factory=_utcnow)
+    notes: str = ""
+
+    def __post_init__(self) -> None:
+        if not (self.field_name or "").strip():
+            raise ResearchContractError("A claim needs a field name.")
+        if not self.evidence:
+            raise ResearchContractError(
+                f"Claim {self.field_name!r} has no evidence. An extraction with no page behind "
+                "it cannot be checked, and an unverifiable claim looks exactly like a verified "
+                "one once it is a number in a table (FOM_PROOF Sec. 2.2)."
+            )
+        if self.value is None and not (self.value_text or "").strip():
+            raise ResearchContractError(
+                f"Claim {self.field_name!r} has neither a numeric value nor a text value."
+            )
+        if self.normalized_value is not None and not self.normalization_note:
+            raise ResearchContractError(
+                f"Claim {self.field_name!r} carries a normalised value with no note saying how it "
+                "was converted. An unexplained conversion is not auditable."
+            )
+        unknown = set(self.context) - set(CLAIM_CONTEXT_FIELDS)
+        if unknown:
+            #  Kept rather than dropped, but flagged: an unrecognised context key
+            #  is usually a typo that would silently stop matching.
+            self.notes = (
+                f"{self.notes} [unrecognised context keys: {sorted(unknown)}]".strip()
+            )
+        self._quarantine_mislabelled_units()
+        self._derive_kelvin_from_celsius()
+
+    def _derive_kelvin_from_celsius(self) -> None:
+        """Fill ``temperature_k`` from ``temperature_c``, in code rather than in a prompt.
+
+        ``REQUIRED_CONTEXT`` demands ``temperature_k`` for every growth claim, while the
+        extraction prompt forbids converting anything — correctly, because a model that
+        converts units confidently is the worst failure mode available to it. Taken
+        together those two rules made a claim from any source stating °C permanently
+        incomparable, and essentially every ALD and PLD paper states °C. So the
+        conversion happens here: it is exact, it is one line, and it is auditable.
+
+        ``temperature_c`` is kept, not consumed. What the source said is the record; the
+        kelvin value is derived from it and says so.
+        """
+        celsius = self.context.get("temperature_c")
+        if celsius is None or "temperature_k" in self.context:
+            return
+        if isinstance(celsius, bool) or not isinstance(celsius, (int, float)):
+            return
+        self.context["temperature_k"] = round(float(celsius) + 273.15, 2)
+        self.notes = (
+            f"{self.notes} [temperature_k {self.context['temperature_k']} derived from "
+            f"the stated {celsius} degC; the source did not state kelvin]"
+        ).strip()
+
+    def _quarantine_mislabelled_units(self) -> None:
+        """Move a non-numeric value out of a unit-bearing context field.
+
+        ``temperature_k="200 to 300 degC"`` is worse than a missing temperature: the
+        field name asserts kelvin, so anything that trusts it reads 200-300 K. The
+        value is preserved under ``<field>_as_stated`` — the source did say it, and
+        discarding it would lose information — and the unit-bearing field is left
+        absent, so ``missing_context`` reports it honestly.
+        """
+        for field_name, unit in UNIT_BEARING_CONTEXT.items():
+            if field_name not in self.context:
+                continue
+            value = self.context[field_name]
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                continue
+            #  A bare numeric string is fine; anything else is not a value in `unit`.
+            try:
+                self.context[field_name] = float(str(value).strip())
+                continue
+            except (TypeError, ValueError):
+                pass
+            self.context[f"{field_name}_as_stated"] = value
+            del self.context[field_name]
+            self.notes = (
+                f"{self.notes} [{field_name} held {value!r}, which is not a number in "
+                f"{unit}; moved to {field_name}_as_stated and the field left absent]"
+            ).strip()
+
+    @property
+    def missing_context(self) -> list[str]:
+        """Context this claim's field needs and does not have."""
+        required = REQUIRED_CONTEXT.get(self.field_name, ())
+        return [key for key in required if self.context.get(key) in (None, "", [])]
+
+    @property
+    def is_context_complete(self) -> bool:
+        return not self.missing_context
+
+    @property
+    def is_comparable(self) -> bool:
+        """Whether this claim could be set beside a stored value at all.
+
+        Needs a number, a unit, complete context, and at least one locatable piece
+        of evidence. Anything less is worth reading and not worth comparing.
+        """
+        return (
+            self.value is not None
+            and bool(self.units)
+            and self.is_context_complete
+            and any(item.is_locatable for item in self.evidence)
+        )
+
+    def as_dict(self) -> dict:
+        return {
+            "field_name": self.field_name,
+            "value": self.value,
+            "units": self.units,
+            "value_text": self.value_text,
+            "normalized_value": self.normalized_value,
+            "normalized_units": self.normalized_units,
+            "normalization_note": self.normalization_note,
+            "tier": self.tier.value,
+            "status": self.status.value,
+            "context": self.context,
+            "missing_context": self.missing_context,
+            "context_complete": self.is_context_complete,
+            "comparable": self.is_comparable,
+            "model_confidence": self.model_confidence,
+            "extracted_by_model": self.extracted_by_model,
+            "extracted_by_provider": self.extracted_by_provider,
+            "prompt_version": self.prompt_version,
+            "extracted_at": self.extracted_at.isoformat(),
+            "notes": self.notes,
+            "evidence": [item.as_dict() for item in self.evidence],
+            "is_measurement": False,
+        }
+
+
+@dataclass
+class Contradiction:
+    """Two claims that cannot both hold, kept as two.
+
+    There is deliberately no ``resolved_value``. FOM_PROOF Sec. 2.1 forbids merging
+    records without a declared aggregation rule, and two sources disagreeing do not
+    have a mean worth reporting — they have a discrepancy someone has to explain.
+    """
+
+    field_name: str
+    left: ExtractedClaim
+    right: ExtractedClaim
+    basis: str
+    #  What differs in their context, which is usually the explanation.
+    differing_context: dict[str, tuple[Any, Any]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not (self.basis or "").strip():
+            raise ResearchContractError(
+                "A contradiction needs a basis saying what conflicts and how it was judged. "
+                "Recording that two sources disagree while discarding what they disagree about "
+                "leaves nobody able to settle it."
+            )
+
+    @property
+    def relative_spread(self) -> float | None:
+        left, right = self.left.value, self.right.value
+        if left is None or right is None:
+            return None
+        midpoint = (left + right) / 2.0
+        return abs(left - right) / abs(midpoint) if midpoint else None
+
+    def as_dict(self) -> dict:
+        return {
+            "field_name": self.field_name,
+            "basis": self.basis,
+            "relative_spread": self.relative_spread,
+            "differing_context": {k: list(v) for k, v in self.differing_context.items()},
+            "left": self.left.as_dict(),
+            "right": self.right.as_dict(),
+        }
+
+
+@dataclass
+class DataGap:
+    """Something the corpus was asked for and does not contain.
+
+    A first-class object rather than a sentence in prose, because the gap list is
+    the actionable output of a brief: it is the reading list, and it is what
+    distinguishes "we do not know" from "we did not look".
+    """
+
+    question: str
+    what_was_searched: str
+    what_would_resolve_it: str
+    field_name: str | None = None
+
+    def __post_init__(self) -> None:
+        if not (self.what_would_resolve_it or "").strip():
+            raise ResearchContractError(
+                f"Data gap {self.question!r} does not say what would resolve it. A gap with no "
+                "route out of it is a complaint, not a finding."
+            )
+
+    def as_dict(self) -> dict:
+        return {
+            "question": self.question,
+            "field_name": self.field_name,
+            "what_was_searched": self.what_was_searched,
+            "what_would_resolve_it": self.what_would_resolve_it,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Proposed BO context
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class BoundProposal:
+    """A proposed narrowing of one numeric parameter."""
+
+    parameter: str
+    lower: float
+    upper: float
+    rationale: str
+    evidence: list[EvidenceItem] = field(default_factory=list)
+    card_slug: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.upper <= self.lower:
+            raise ResearchContractError(
+                f"{self.parameter}: proposed upper ({self.upper}) must exceed lower ({self.lower})."
+            )
+        if not (self.rationale or "").strip():
+            raise ResearchContractError(f"{self.parameter}: a bound proposal needs a rationale.")
+
+    def as_dict(self) -> dict:
+        return {
+            "parameter": self.parameter,
+            "lower": self.lower,
+            "upper": self.upper,
+            "rationale": self.rationale,
+            "card_slug": self.card_slug,
+            "evidence": [item.as_dict() for item in self.evidence],
+        }
+
+
+@dataclass
+class ProposedBOContext:
+    """A proposed change to a campaign's configuration, awaiting review.
+
+    The hard/soft split is the design. ``recommended_bounds`` and
+    ``excluded_choices`` can change what the optimizer is allowed to propose, so
+    they are reviewed and applied explicitly. ``soft_priors``,
+    ``process_window_hints`` and ``uncertainty_notes`` are advisory: they are
+    written to the campaign's ``notes`` for a human to read and never enter the
+    acquisition function, because a literature prior silently steering a GP is a
+    result nobody can attribute afterwards.
+    """
+
+    bo_run_id: int
+    #  Narrowings only. Checked against the live space in `widening_violations`.
+    recommended_bounds: list[BoundProposal] = field(default_factory=list)
+    #  {parameter: [choices to remove]} — categorical combinations known infeasible.
+    excluded_choices: dict[str, list[Any]] = field(default_factory=dict)
+    #  Advisory. Never numerical inputs.
+    soft_priors: list[str] = field(default_factory=list)
+    process_window_hints: list[str] = field(default_factory=list)
+    uncertainty_notes: list[str] = field(default_factory=list)
+    rationale: str = ""
+    #  Card slugs this proposal rests on. The bridge re-checks each one is
+    #  reviewed, non-stale, and sourced at apply time, not just at propose time.
+    supporting_card_slugs: list[str] = field(default_factory=list)
+    status: ContextStatus = ContextStatus.PROPOSED
+    proposed_by: str = "assistant"
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        return not (
+            self.recommended_bounds
+            or self.excluded_choices
+            or self.soft_priors
+            or self.process_window_hints
+            or self.uncertainty_notes
+        )
+
+    @property
+    def changes_search_behaviour(self) -> bool:
+        """Whether applying this would change what the optimizer may propose.
+
+        False means the proposal is entirely advisory, which is a materially
+        different review: nobody needs to check a note as carefully as a bound.
+        """
+        return bool(self.recommended_bounds or self.excluded_choices)
+
+    def widening_violations(self, search_space: dict) -> list[str]:
+        """Bounds that would widen the live space, or name a parameter it lacks.
+
+        A paper may persuade a scientist to *narrow* a search — that is what
+        evidence is for. Widening one past its instrument envelope is a claim about
+        what a tool can physically do, and no paper is a source for that.
+        """
+        parameters = {
+            spec.get("name"): spec for spec in (search_space or {}).get("parameters", [])
+        }
+        problems: list[str] = []
+
+        for proposal in self.recommended_bounds:
+            spec = parameters.get(proposal.parameter)
+            if spec is None:
+                problems.append(
+                    f"{proposal.parameter!r} is not a parameter of this campaign "
+                    f"(has: {sorted(n for n in parameters if n)})."
+                )
+                continue
+            if spec.get("kind") == "categorical":
+                problems.append(
+                    f"{proposal.parameter!r} is categorical; propose excluded_choices for it "
+                    "rather than numeric bounds."
+                )
+                continue
+            low, high = spec.get("lower"), spec.get("upper")
+            if low is None or high is None:
+                problems.append(f"{proposal.parameter!r} has no bounds in the live space.")
+                continue
+            if proposal.lower < float(low):
+                problems.append(
+                    f"{proposal.parameter}: proposed lower {proposal.lower} is below the live "
+                    f"lower bound {low}. A proposal may narrow a search space, never widen it — "
+                    "widening is a claim about what the instrument can reach."
+                )
+            if proposal.upper > float(high):
+                problems.append(
+                    f"{proposal.parameter}: proposed upper {proposal.upper} is above the live "
+                    f"upper bound {high}. A proposal may narrow a search space, never widen it."
+                )
+
+        for parameter, choices in (self.excluded_choices or {}).items():
+            spec = parameters.get(parameter)
+            if spec is None:
+                problems.append(f"{parameter!r} is not a parameter of this campaign.")
+                continue
+            if spec.get("kind") != "categorical":
+                problems.append(f"{parameter!r} is not categorical; excluded_choices does not apply.")
+                continue
+            available = list(spec.get("choices") or [])
+            unknown = [c for c in choices if c not in available]
+            if unknown:
+                problems.append(f"{parameter}: {unknown} are not choices of this parameter.")
+            if available and not [c for c in available if c not in choices]:
+                problems.append(
+                    f"{parameter}: excluding {choices} would leave no choices at all."
+                )
+        return problems
+
+    def as_constraint_patch(self) -> dict:
+        """The ``ConstraintSet``-shaped dict this proposal would contribute.
+
+        Matches ``bo_engine.constraints.ConstraintSet.from_dict``, so the bridge
+        hands the BO engine a shape it already understands rather than a parallel
+        one. Advisory content goes into ``notes``, which that class already
+        documents as "rules a human must check".
+        """
+        notes: list[str] = []
+        for prior in self.soft_priors:
+            notes.append(f"[soft prior, advisory] {prior}")
+        for hint in self.process_window_hints:
+            notes.append(f"[process window, advisory] {hint}")
+        for note in self.uncertainty_notes:
+            notes.append(f"[uncertainty, advisory] {note}")
+        for proposal in self.recommended_bounds:
+            notes.append(
+                f"[bound rationale] {proposal.parameter} narrowed to "
+                f"[{proposal.lower}, {proposal.upper}]: {proposal.rationale}"
+            )
+        return {
+            "bounds": {p.parameter: [p.lower, p.upper] for p in self.recommended_bounds},
+            "allowed_choices": {},  # filled by the bridge, which knows the live choices
+            "notes": notes,
+        }
+
+    def as_dict(self) -> dict:
+        return {
+            "bo_run_id": self.bo_run_id,
+            "status": self.status.value,
+            "changes_search_behaviour": self.changes_search_behaviour,
+            "recommended_bounds": [p.as_dict() for p in self.recommended_bounds],
+            "excluded_choices": self.excluded_choices,
+            "soft_priors": self.soft_priors,
+            "process_window_hints": self.process_window_hints,
+            "uncertainty_notes": self.uncertainty_notes,
+            "rationale": self.rationale,
+            "supporting_card_slugs": self.supporting_card_slugs,
+            "proposed_by": self.proposed_by,
+            "reviewed_by": self.reviewed_by,
+            "reviewed_at": self.reviewed_at.isoformat() if self.reviewed_at else None,
+        }
+
+
+# ---------------------------------------------------------------------------
+# The brief
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class LabelledStatement:
+    """One sentence, with what kind of sentence it is."""
+
+    kind: StatementKind
+    text: str
+    evidence: list[EvidenceItem] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.kind is StatementKind.EVIDENCE and not self.evidence:
+            raise ResearchContractError(
+                f"A statement labelled EVIDENCE must carry its evidence: {self.text[:80]!r}"
+            )
+
+    def as_dict(self) -> dict:
+        return {
+            "kind": self.kind.value,
+            "text": self.text,
+            "evidence": [item.as_dict() for item in self.evidence],
+        }
+
+
+@dataclass
+class ResearchBrief:
+    """What the assistant found, what it could not find, and what it suggests.
+
+    Read-only with respect to every scientific table. Producing one changes
+    nothing: it is a document about the state of the evidence, and the only thing
+    it can cause is a person deciding to act.
+    """
+
+    research_question: str
+    bo_run_id: int | None = None
+    experiment_id: int | None = None
+    material: str | None = None
+    specimen_form: str | None = None
+    target_property: str | None = None
+    fom_definition: str | None = None
+
+    evidence: list[EvidenceItem] = field(default_factory=list)
+    claims: list[ExtractedClaim] = field(default_factory=list)
+    contradictions: list[Contradiction] = field(default_factory=list)
+    data_gaps: list[DataGap] = field(default_factory=list)
+    statements: list[LabelledStatement] = field(default_factory=list)
+    proposed_actions: list[str] = field(default_factory=list)
+    proposed_context: ProposedBOContext | None = None
+    proposed_card_slugs: list[str] = field(default_factory=list)
+
+    #  Warnings the loop is obliged to surface: an unapproved FOM definition, a
+    #  stalled campaign, suggestions on a bound, a clamped fit parameter, a
+    #  proposed card used as context.
+    warnings: list[str] = field(default_factory=list)
+
+    status: BriefStatus = BriefStatus.PROPOSED
+    model: str = ""
+    provider: str = ""
+    policy_version: str = ""
+    tool_calls: list[dict] = field(default_factory=list)
+    created_at: datetime = field(default_factory=_utcnow)
+    #  True when the assistant declined for want of evidence. A brief that abstains
+    #  is a successful brief; it is the gap list that makes it useful.
+    abstained: bool = False
+    #  Non-empty when one or more model calls failed outright. A failed grade drops
+    #  its passage and a failed extraction yields no claims, so an unreachable model
+    #  produces a brief that looks like a thin corpus. Kept separate from
+    #  ``abstained`` because "we found no evidence" and "we could not look" are
+    #  different findings, and only the first is a finding at all.
+    degraded_reason: str = ""
+
+    @property
+    def degraded(self) -> bool:
+        return bool(self.degraded_reason)
+
+    def __post_init__(self) -> None:
+        if not (self.research_question or "").strip():
+            raise ResearchContractError("A brief needs a research question.")
+
+    @property
+    def comparable_claims(self) -> list[ExtractedClaim]:
+        return [claim for claim in self.claims if claim.is_comparable]
+
+    @property
+    def incomplete_claims(self) -> list[ExtractedClaim]:
+        return [claim for claim in self.claims if not claim.is_context_complete]
+
+    @property
+    def unsupported_statements(self) -> list[LabelledStatement]:
+        """Interpretations and proposals resting on no evidence anywhere in the brief.
+
+        Not an error — an interpretation is allowed to reason over several pieces of
+        evidence without citing one per sentence — but the count is the headline
+        number when judging whether a brief is grounded.
+        """
+        if self.evidence or self.claims:
+            return []
+        return [s for s in self.statements if s.kind is not StatementKind.EVIDENCE]
+
+    def fingerprint(self) -> str:
+        """Stable hash of the brief's substantive content.
+
+        Excludes timestamps and the tool trace, so re-running the same question
+        against an unchanged corpus produces the same fingerprint — which is how a
+        benchmark tells a policy change from noise.
+        """
+        payload = {
+            "question": self.research_question,
+            "bo_run_id": self.bo_run_id,
+            "claims": sorted(
+                f"{c.field_name}={c.value}{c.units or ''}|{sorted(c.context.items(), key=str)}"
+                for c in self.claims
+            ),
+            "gaps": sorted(g.question for g in self.data_gaps),
+            "contradictions": sorted(c.field_name for c in self.contradictions),
+            "evidence": sorted(e.citation for e in self.evidence),
+        }
+        blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    def as_dict(self) -> dict:
+        return {
+            "research_question": self.research_question,
+            "bo_run_id": self.bo_run_id,
+            "experiment_id": self.experiment_id,
+            "material": self.material,
+            "specimen_form": self.specimen_form,
+            "target_property": self.target_property,
+            "fom_definition": self.fom_definition,
+            "status": self.status.value,
+            "abstained": self.abstained,
+            "degraded": self.degraded,
+            "degraded_reason": self.degraded_reason,
+            "evidence": [item.as_dict() for item in self.evidence],
+            "claims": [claim.as_dict() for claim in self.claims],
+            "contradictions": [c.as_dict() for c in self.contradictions],
+            "data_gaps": [g.as_dict() for g in self.data_gaps],
+            "statements": [s.as_dict() for s in self.statements],
+            "proposed_actions": self.proposed_actions,
+            "proposed_context": self.proposed_context.as_dict() if self.proposed_context else None,
+            "proposed_card_slugs": self.proposed_card_slugs,
+            "warnings": self.warnings,
+            "model": self.model,
+            "provider": self.provider,
+            "policy_version": self.policy_version,
+            "tool_calls": self.tool_calls,
+            "created_at": self.created_at.isoformat(),
+            "fingerprint": self.fingerprint(),
+            "n_comparable_claims": len(self.comparable_claims),
+            "n_incomplete_claims": len(self.incomplete_claims),
+            "disclaimer": (
+                "Every claim here is a literature extraction, not a measurement. Nothing in this "
+                "brief has entered property_values, descriptor_values, or any FOM score, and "
+                "there is no code path by which it could. A value reaches the analysis tables "
+                "through PropertyValue with its DOI, page, and full context, entered or reviewed "
+                "by a person."
+            ),
+        }

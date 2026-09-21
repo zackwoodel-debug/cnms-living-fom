@@ -132,7 +132,7 @@ def get_chat_model(model: str | None = None, temperature: float = 0.0):
 def format_context(hits: list[ChunkHit]) -> str:
     """Number the excerpts so the model's [n] citations resolve to real sources."""
     return "\n\n".join(
-        f"[{i}] {hit.citation()}\n{hit.text.strip()}" for i, hit in enumerate(hits, start=1)
+        f"[{i}] {hit.citation}\n{hit.text.strip()}" for i, hit in enumerate(hits, start=1)
     )
 
 
@@ -177,7 +177,7 @@ def answer_question(
         "graded": outcome.graded,
         "candidates": [
             {
-                "citation": hit.fused.hit.citation(),
+                "citation": hit.fused.hit.citation,
                 "grade": hit.grade,
                 "grade_reason": hit.reason,
                 "rrf_score": hit.fused.rrf_score,

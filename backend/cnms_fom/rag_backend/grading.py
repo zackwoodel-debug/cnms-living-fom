@@ -40,6 +40,7 @@ from dataclasses import dataclass
 from cnms_fom.config import get_settings
 from cnms_fom.db.enums import SynthesisTechnique
 
+from . import cache
 from .hybrid import FusedHit, hybrid_search
 from .providers import ChatProvider, get_provider
 
@@ -62,6 +63,10 @@ MIN_USEFUL_GRADE = 2
 #  allowed: a single passage that directly states a growth window is a better
 #  basis than four that circle it. Zero is not.
 MIN_USEFUL_PASSAGES = 1
+
+#  Bumped whenever GRADER_PROMPT changes. It is part of the cache key, so an
+#  edited prompt must not be served answers graded under the old one.
+GRADER_PROMPT_VERSION = "grade-v1"
 
 GRADER_PROMPT = """\
 You grade whether a retrieved passage answers a question about thin-film \
@@ -193,53 +198,95 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-def grade_hit(provider: ChatProvider, question: str, hit: FusedHit) -> GradedHit:
-    """Grade one passage.
+def _call_grader(provider: ChatProvider, question: str, hit: FusedHit) -> dict:
+    """One grading call, reduced to the ``{grade, reason}`` worth caching.
 
-    An unparseable or refused grader reply yields grade 1 — related but not
-    useful.  Failing *closed* is the only safe default: defaulting to 3 would
-    turn every grader hiccup into a fabricated basis for an answer, and
-    defaulting to 0 would silently empty the context and report a data gap that
-    the corpus does not actually have.  Grade 1 keeps the passage out of the
-    answer while leaving it visible in the evidence trail.
+    Raises on a transport failure so :func:`cache.map_cached` records a miss rather
+    than remembering it: caching a failure would make one unreachable server poison
+    every later run.
     """
     message = (
         f"Question: {question}\n\n"
-        f"Passage ({hit.hit.citation()}):\n{hit.hit.text.strip()}\n\n"
+        f"Passage ({hit.hit.citation}):\n{hit.hit.text.strip()}\n\n"
         "Grade this passage."
     )
-    try:
-        result = provider.send(GRADER_PROMPT, [{"role": "user", "content": message}])
-    except Exception as exc:  # noqa: BLE001 - grading must not fail the request
-        logger.warning("Grader call failed for chunk %s: %s", hit.hit.chunk_id, exc)
-        return GradedHit(fused=hit, grade=1, reason=f"grader unavailable ({exc})")
-
+    result = provider.send(GRADER_PROMPT, [{"role": "user", "content": message}])
     if result.refused:
-        return GradedHit(fused=hit, grade=1, reason="grader declined to assess this passage")
+        return {"grade": 1, "reason": "grader declined to assess this passage"}
 
     parsed = _extract_json(result.text) or {}
     try:
         grade = int(parsed.get("grade"))
     except (TypeError, ValueError):
         logger.debug("Ungradeable reply for chunk %s: %r", hit.hit.chunk_id, result.text[:200])
-        return GradedHit(fused=hit, grade=1, reason="grader reply was not parseable")
+        return {"grade": 1, "reason": "grader reply was not parseable"}
+    return {"grade": max(0, min(3, grade)), "reason": str(parsed.get("reason", ""))[:300]}
 
-    grade = max(0, min(3, grade))
-    return GradedHit(fused=hit, grade=grade, reason=str(parsed.get("reason", ""))[:300])
+
+def _graded_from_payload(
+    hit: FusedHit, payload: dict | None, *, error: str | None = None
+) -> GradedHit:
+    """Turn a grader payload into a :class:`GradedHit`, failing closed.
+
+    A missing or unparseable reply yields grade 1 — related but not useful.  Failing
+    *closed* is the only safe default: defaulting to 3 would turn every grader hiccup
+    into a fabricated basis for an answer, and defaulting to 0 would silently empty
+    the context and report a data gap the corpus does not actually have.  Grade 1
+    keeps the passage out of the answer while leaving it in the evidence trail.
+    """
+    if not payload:
+        return GradedHit(
+            fused=hit, grade=1,
+            reason=f"grader unavailable ({error})" if error else "grader unavailable",
+        )
+    return GradedHit(
+        fused=hit, grade=int(payload.get("grade", 1)), reason=str(payload.get("reason", ""))
+    )
+
+
+def grade_hit(provider: ChatProvider, question: str, hit: FusedHit) -> GradedHit:
+    """Grade one passage. Uncached; kept for callers that grade a single hit."""
+    try:
+        payload = _call_grader(provider, question, hit)
+    except Exception as exc:  # noqa: BLE001 - grading must not fail the request
+        logger.warning("Grader call failed for chunk %s: %s", hit.hit.chunk_id, exc)
+        return GradedHit(fused=hit, grade=1, reason=f"grader unavailable ({exc})")
+    return _graded_from_payload(hit, payload)
 
 
 def grade_and_rerank(
-    provider: ChatProvider, question: str, candidates: list[FusedHit]
-) -> list[GradedHit]:
+    provider: ChatProvider,
+    question: str,
+    candidates: list[FusedHit],
+    *,
+    db=None,
+) -> tuple[list[GradedHit], dict]:
     """Grade every candidate and order by grade, then by fusion score.
 
-    Grade first, fusion score second: a passage the grader called a 3 belongs
-    ahead of one it called a 2 regardless of how the retrievers ranked them, and
-    within a grade the fused rank is the best tiebreak available.
+    Grade first, fusion score second: a passage the grader called a 3 belongs ahead
+    of one it called a 2 regardless of how the retrievers ranked them, and within a
+    grade the fused rank is the best tiebreak available.
+
+    With a ``db``, grades are cached on a hash of (question, passage) and the calls
+    for the misses run concurrently. Both are exact: the same inputs produce the same
+    grades, just with less waiting. Returns the grades and a cost report, because
+    "how many model calls did that take?" is the number worth surfacing.
     """
-    graded = [grade_hit(provider, question, candidate) for candidate in candidates]
+    payloads, cached, called, errors = cache.map_cached(
+        db,
+        candidates,
+        kind=cache.KIND_GRADE,
+        key_of=lambda hit: cache.grade_key(question, hit.hit.text),
+        model=getattr(provider, "model", "unknown"),
+        prompt_version=GRADER_PROMPT_VERSION,
+        call=lambda hit: _call_grader(provider, question, hit),
+    )
+    graded = [
+        _graded_from_payload(hit, payload, error=errors.get(index))
+        for index, (hit, payload) in enumerate(zip(candidates, payloads, strict=True))
+    ]
     graded.sort(key=lambda g: (g.grade, g.fused.rrf_score), reverse=True)
-    return graded
+    return graded, {"cached": cached, "called": called, "failed": len(errors)}
 
 
 def rewrite_query(provider: ChatProvider, question: str) -> str | None:
@@ -267,6 +314,18 @@ def rewrite_query(provider: ChatProvider, question: str) -> str | None:
     return rewritten
 
 
+def graded_and_costed(provider, question, candidates, *, db, record: dict) -> list[GradedHit]:
+    """``grade_and_rerank``, with the call count folded into the attempt record."""
+    graded, cost = grade_and_rerank(provider, question, candidates, db=db)
+    record["grader_calls"] = cost["called"]
+    record["grader_cache_hits"] = cost["cached"]
+    #  Recorded, not discarded. A grader that could not be reached fails each hit
+    #  closed to grade 1, which drops the passage — so a transport outage looks
+    #  exactly like a corpus with nothing relevant in it unless the count survives.
+    record["grader_failed"] = cost["failed"]
+    return graded
+
+
 def retrieve_with_correction(
     session,
     question: str,
@@ -280,6 +339,7 @@ def retrieve_with_correction(
     depth: int = 12,
     use_vector: bool = True,
     use_lexical: bool = True,
+    cache_db=None,
 ) -> RetrievalOutcome:
     """Hybrid retrieve, grade, and retry once with a rewritten query if needed.
 
@@ -329,7 +389,10 @@ def retrieve_with_correction(
             attempts.append({**record, "n_useful": 0, "note": "no candidates retrieved"})
         else:
             hits = (
-                grade_and_rerank(grader, question, candidates)
+                graded_and_costed(
+                    grader, question, candidates,
+                    db=cache_db if cache_db is not None else session, record=record,
+                )
                 if grade
                 #  Ungraded: treat fusion order as the ranking and mark every
                 #  candidate useful-by-default, flagged via ``graded=False`` so
