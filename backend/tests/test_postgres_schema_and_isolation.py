@@ -65,6 +65,14 @@ def pg_database():
     with admin.connect() as conn:
         conn.execute(text(f'CREATE DATABASE "{name}"'))
     url = _with_database(name)
+    created = create_engine(url, isolation_level="AUTOCOMMIT", future=True)
+    with created.connect() as conn:
+        #  A new database does not inherit extensions from the template, and with
+        #  PGVECTOR_ENABLED the ORM asks for VECTOR(768). Without this, create_all
+        #  fails with 'type "vector" does not exist' — which only shows up where
+        #  pgvector is actually switched on, so it passed locally and failed in CI.
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    created.dispose()
     try:
         yield url
     finally:

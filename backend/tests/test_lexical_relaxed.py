@@ -117,6 +117,14 @@ def pg_session():
     with admin.connect() as conn:
         conn.execute(text(f'CREATE DATABASE "{name}"'))
     url = make_url(POSTGRES_URL).set(database=name).render_as_string(hide_password=False)
+    created = create_engine(url, isolation_level="AUTOCOMMIT", future=True)
+    with created.connect() as conn:
+        #  A new database does not inherit extensions from the template, and with
+        #  PGVECTOR_ENABLED the ORM asks for VECTOR(768). Without this, create_all
+        #  fails with 'type "vector" does not exist' — which only shows up where
+        #  pgvector is actually switched on, so it passed locally and failed in CI.
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    created.dispose()
     engine = create_engine(url, future=True)
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine, autoflush=False, future=True)()
