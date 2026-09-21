@@ -47,6 +47,7 @@ about being a fallback.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from collections import defaultdict
@@ -489,6 +490,29 @@ def reciprocal_rank_fusion(
     return fused
 
 
+@contextlib.contextmanager
+def _failure_isolated(session):
+    """Run a query so that its failure cannot poison the caller's transaction.
+
+    On Postgres this is a SAVEPOINT: the statement rolls back alone and the session
+    stays usable. On SQLite and on an unbound session it is a no-op, because there is
+    nothing to isolate and ``begin_nested`` on some of those raises in its own right.
+    """
+    if not _is_postgres(session):
+        yield
+        return
+    nested = session.begin_nested()
+    try:
+        yield
+    except Exception:
+        if nested.is_active:
+            nested.rollback()
+        raise
+    else:
+        if nested.is_active:
+            nested.commit()
+
+
 def hybrid_search(
     session,
     query: str,
@@ -515,13 +539,21 @@ def hybrid_search(
         try:
             from .embeddings import embed_query
 
-            lists["vector"] = search_chunks(
-                session,
-                embed_query(query),
-                k=depth,
-                techniques=techniques,
-                min_similarity=min_similarity,
-            )
+            #  SAVEPOINT for the same reason the lexical leg has one, and found the
+            #  same way: on a live server. Postgres aborts the entire transaction on
+            #  any statement error, so a dense query that fails — pgvector enabled
+            #  against an `embedding` column that is still `json`, say — poisoned the
+            #  session, and the lexical fallback below then died too with
+            #  InFailedSqlTransaction. The whole request failed on a retriever that
+            #  was supposed to be optional.
+            with _failure_isolated(session):
+                lists["vector"] = search_chunks(
+                    session,
+                    embed_query(query),
+                    k=depth,
+                    techniques=techniques,
+                    min_similarity=min_similarity,
+                )
         except Exception as exc:  # noqa: BLE001 - see below
             #  Ollama unreachable, or the rag extra not installed. Either way,
             #  half a retriever beats none: lexical search alone still finds
