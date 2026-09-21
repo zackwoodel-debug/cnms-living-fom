@@ -12,6 +12,14 @@ reported as a summary only. The scientific result is the mediated pathway
 `Sⱼ → P_q → F_a`, because a direct correlation does not identify the
 intermediate property pathway that produced it.
 
+![Quark, the chat interface: a rail of research threads on the left, an empty conversation asking "What are we investigating?", four starter actions, and a composer showing the local Ollama runtime.](quark/docs/quark-screenshot.png)
+
+*`quark/` is the front end. The thread rail is grouped the way the system is —
+pilot workflow, evidence research, scientific analysis — and the footer names the
+model and port actually serving the answer (`llama3.1:8b`, `localhost:11434`),
+because "this ran locally" should be visible rather than asserted. Threads reset
+when the page closes; there is no server-side history yet.*
+
 ---
 
 ## What makes it defensible
