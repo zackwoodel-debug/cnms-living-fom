@@ -107,11 +107,16 @@ def pg_session():
     import uuid
 
     name = f"cnms_lex_{uuid.uuid4().hex[:12]}"
-    admin_url = str(make_url(POSTGRES_URL).set(database="postgres"))
+    #  render_as_string(hide_password=False), not str(): SQLAlchemy masks the password
+    #  in __str__, so str(url) gives "cnms:***@..." and auth fails anywhere passwords
+    #  are actually checked.
+    admin_url = make_url(POSTGRES_URL).set(database="postgres").render_as_string(
+        hide_password=False
+    )
     admin = create_engine(admin_url, isolation_level="AUTOCOMMIT", future=True)
     with admin.connect() as conn:
         conn.execute(text(f'CREATE DATABASE "{name}"'))
-    url = str(make_url(POSTGRES_URL).set(database=name))
+    url = make_url(POSTGRES_URL).set(database=name).render_as_string(hide_password=False)
     engine = create_engine(url, future=True)
     Base.metadata.create_all(engine)
     session = sessionmaker(bind=engine, autoflush=False, future=True)()

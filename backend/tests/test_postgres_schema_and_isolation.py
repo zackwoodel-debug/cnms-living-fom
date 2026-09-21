@@ -43,8 +43,16 @@ def _with_database(name: str) -> str:
     ``make_url`` rather than string surgery: a unix-socket URL carries ``?host=/tmp``,
     whose query string contains a slash, so splitting on the last "/" finds the wrong
     one and silently produces a host of "/postgres".
+
+    ``render_as_string(hide_password=False)`` rather than ``str(url)``: SQLAlchemy
+    masks the password in ``__str__``, so ``str(url)`` yields ``cnms:***@...`` and the
+    connection fails auth. It worked locally only because that Postgres trusts a unix
+    socket and ignores the password entirely — the same "passes where auth is not real"
+    trap as the rest of this file guards against.
     """
-    return str(make_url(POSTGRES_URL).set(database=name))
+    return make_url(POSTGRES_URL).set(database=name).render_as_string(
+        hide_password=False
+    )
 
 
 @pytest.fixture
@@ -125,6 +133,26 @@ def _seed(session) -> int:
     session.add(chunk)
     session.commit()
     return chunk.id
+
+
+def test_the_admin_url_keeps_its_password():
+    """`str(url)` masks the password, which fails wherever auth is real.
+
+    Not marked postgres-only: it is a property of the helper, and it needs to fail on
+    any machine rather than only on one with password authentication. The bug reached
+    CI precisely because the developer's Postgres trusts a unix socket and never
+    checked the password that `str()` had already replaced with "***".
+    """
+    from sqlalchemy.engine.url import make_url as _make_url
+
+    sample = "postgresql+psycopg2://someone:s3cret@localhost:5432/somedb"
+    rendered = _make_url(sample).set(database="postgres").render_as_string(
+        hide_password=False
+    )
+    assert "s3cret" in rendered
+    assert "***" not in rendered
+    #  And the masking this guards against is real, not imagined.
+    assert "***" in str(_make_url(sample).set(database="postgres"))
 
 
 # --- 1A. schema parity ----------------------------------------------------
