@@ -1014,6 +1014,394 @@ missing one appear.
 
 ---
 
+## 10e. Where extraction recall is actually lost
+
+Limitation 6b asserted that "extraction recall, not retrieval, is the binding
+constraint". That was a hypothesis dressed as a finding, and `extraction_f1 = 0.397`
+could not settle it: a key- or unit-normalisation mismatch in the *grader* produces the
+same number as a genuine extraction miss. `scripts/extraction_trace.py` walks one
+expected claim through all seven stages and names the first that loses it.
+
+**The hypothesis is refuted. Of four missing claims, none is an extraction-capability
+failure.**
+
+| claim | S0 src | S1 chunk | S2 retr | S3 model | S4 guard | S5 grade | S6 brief | first fail | cause | fix |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `gpc_098` (real, flagship) | ok | ok | **XX** | – | – | – | XX | **S2** | graded **1**, "does not mention film density or sources"; dense had it at rank 3 | grading |
+| `gpc_142` (real, control) | ok | ok | ok | ok | ok | ok | ok | – | passes end to end | – |
+| `decomposition_onset` | ok | ok | ok (grade 3) | **XX** | – | – | – | **S3** | emitted 3 neighbouring claims, none carrying 320 | F / prompt |
+| `substrate_temperature` | ok | ok | ok | key | ok | **XX** | ok | **S5** | extracted as `temperature_c=700 degC`, **is in the brief**; gold key differs | D |
+| `oxygen_pressure` | ok | ok | ok | key | ok | **XX** | ok | **S5** | extracted as `pressure_torr=100 mTorr`, **is in the brief**; gold key differs | D |
+
+### Diagnosis
+
+**The flagship case is a grading failure, not an extraction failure.** `gpc_098` never
+reaches the extractor: dense retrieval ranks it 3rd, and the grader scores it **1** with
+the reason "discusses growth per cycle but does not mention film density or sources".
+The structurally identical passage carrying 1.42 — same document type, same sentence
+shape, same compound question — scores **2**, with `grade-v3`'s own wording, "contains
+part of what the question asks for". So `grade-v3` is active and correct on one passage
+and not the other: this is 7B grader **variance**, not a missing rule, and no further
+prompt rule will fix a model that already has the rule and applies it half the time.
+Handed that same passage directly, the extractor emits
+`{"field": "growth_per_cycle_ang", "value": 0.98, "units": "angstrom per cycle"}` —
+perfectly. Extraction was never the problem here.
+
+**Two of the three benchmark "misses" are not misses.** `substrate_temperature=700` and
+`oxygen_pressure=100` are extracted, survive every guard, and appear in the brief, filed
+under `temperature_c` and `pressure_torr` — registry keys the `extract-v4` prompt
+explicitly instructs the model to use. `_match_claims` requires exact `field_name`
+equality, so the benchmark scores a correct extraction as a miss. **`extraction_f1 =
+0.397` is therefore a lower bound that understates true recall**, exactly as suspected,
+and the gold keys are the thing that is wrong.
+
+**Only `decomposition_onset` is a real S3 miss**, and it is the weakest of the five gold
+claims: the passage states 320 degC as the *condition* under which growth per cycle fell
+("Above 320 degC it fell to 0.71 angstrom per cycle as TDMAH begins to decompose"), so
+the extractor treated it as context for a growth claim rather than a claim of its own —
+a defensible reading of a gold expectation that assumes otherwise.
+
+### Step 0: is it variance or compound-question dilution?
+
+Phase 1 called the `gpc_098` grade "7B grader variance". That was wrong, and a 2x3
+matrix settles it. Grading cache cleared first (14 entries), caching disabled for the
+run, `qwen2.5-coder:7b` grader, chunk 5 (`gpc_098`) and chunk 2 (`gpc_142`):
+
+| passage | (a) compound question | (b) "What growth per cycle is reported for HfO2 ALD?" | (c) "What film density is reported for HfO2 ALD?" |
+|---|---|---|---|
+| `gpc_098` (chunk 5) | **1** | **2** | 1 |
+| `gpc_142` (chunk 2) | 2 | 3 | 2 |
+
+Grade reasons, verbatim:
+
+```
+gpc_098  a  1  'The passage discusses growth per cycle for HfO2 ALD but does not
+                mention film density or compare...'
+gpc_098  b  2  'contains part of what the question asks for'
+gpc_098  c  1  'related: same subject area, but does not address what was asked.'
+gpc_142  a  2  'Contains part of what the question asks for (growth per cycle).'
+gpc_142  b  3  'contains the specific fact asked for, together with the context that
+                makes it meaningful'
+gpc_142  c  2  'contains part of what the question asks for'
+```
+
+**This is compound-question dilution, and it is deterministic rather than noisy.** The
+compound form costs exactly **one grade point** on both passages — 2→1 and 3→2. It is
+not variance: the same passage scores 2 on the single-clause form every time.
+
+The second half of the mechanism is that `gpc_098`'s passage sits one point below
+`gpc_142`'s on *every* question (1/2/1 against 2/3/2). Chunk 2 states its value with the
+chamber and the temperature range in one sentence; chunk 5 states the same kind of value
+surrounded by purge-time discussion, and the rubric reserves grade 3 for a fact carrying
+"the context that makes it meaningful". So the two effects compose: the compound question
+subtracts one point, and only the passage that started at 2 falls under
+`MIN_USEFUL_GRADE = 2`.
+
+That makes the remedy a policy question rather than a prompt one. Per-conjunct grading —
+split a compound question, grade each clause, keep the maximum — is the indicated
+experiment, as a `ResearchPolicy` option defaulting to off and judged on the benchmark.
+Recorded here; not implemented in this step.
+
+### Two cross-cutting bugs the trace exposed
+
+**Bug 18: the lexical leg returns zero hits for any natural-language question.** On every
+one of the five traces, on both corpora, on Postgres: `lexical 0 hits; target NOT
+RETRIEVED`, while dense returned 7–12. `websearch_to_tsquery` ANDs its terms, so a
+14-word question requires all 14 stems in one chunk and matches nothing. **Dense
+retrieval alone has been carrying this system.** Every RRF, fusion and
+`page_precision` number in §§10–10d was measured on short benchmark questions where the
+AND happens to be satisfiable; the §10c finding that "dense and lexical score
+identically" now reads differently — they score identically on short questions, and on
+real ones lexical contributes nothing at all.
+
+**Bug 19: a missing `search_title` column poisons the whole Postgres session.**
+`search_title` is created by migration 0007 and is *not* an ORM column, so any schema
+built by `Base.metadata.create_all` — `cnms-fom init-db`, the benchmark's throwaway
+database, tests — lacks it. The lexical query then raises `UndefinedColumn`, and the
+documented fallback to term overlap **cannot run**: the transaction is already aborted,
+so the fallback itself raises `InFailedSqlTransaction`, and every subsequent query in
+that session fails too. Proven directly: a `select count(*)` that worked before the
+lexical call fails after it, and an explicit `rollback()` restores it. This is bug 14's
+pattern for the third time — a fallback that reads correctly in the source and cannot
+function — and it is why the three fixture claims initially traced as `S2 FAIL` with a
+transaction error rather than a retrieval result.
+
+### What this means for the plan
+
+The cheap, high-value work is **not** in the extractor:
+
+1. grading variance on the flagship case (S2),
+2. the benchmark's gold keys disagreeing with the platform's registry (S5),
+3. the lexical leg being dead for real questions (bug 18),
+4. the fallback that poisons its own session (bug 19).
+
+A fifth, found while tracing rather than in the table: the extractor sometimes emits
+`value: null` with the number in `value_text` (`"value_text": "0.98 angstrom per
+cycle"`). A claim with no numeric `value` is invisible to `is_comparable`,
+`_match_claims` and contradiction detection, so the number is read and then discarded.
+Recovering a scalar from a `value_text` holding exactly one number is deterministic, free
+and needs no prompt change — while a `value_text` holding a genuine range must stay
+`None`, because inventing a scalar from "200 to 300 degC" is a fabrication.
+
+---
+
+## 10f. Phase 2: fixing the four stages that were not the extractor
+
+§10e named five losses and none of them was extraction capability. This is what fixing
+four of them cost and bought. The extractor and the `extract-v4` prompt are untouched.
+
+### Bug 19: schema parity, and a fallback that poisoned its own session
+
+Reproducer, on PostgreSQL 17.10:
+
+```
+1. a plain query before any lexical search:   24 documents
+2. lexical_search(...)                        RAISED InFailedSqlTransaction
+                                              (after logging "falling back to
+                                               term overlap")
+3. the SAME plain query, after:               POISONED: InFailedSqlTransaction
+4. after an explicit rollback():              24 documents - session recovers
+```
+
+Two causes, fixed separately.
+
+*Schema divergence.* `search_title` was created by migration 0007 and was **not** an ORM
+column, so `metadata.create_all` — used by `cnms-fom init-db`, the benchmark's throwaway
+database and the test suite — produced a schema the Postgres lexical query could not run
+against. Now declared on `DocumentChunk`. The triggers remain migration-only, so a
+`create_all` schema has the column and no triggers: `search_title` stays NULL, the query
+wraps it in `coalesce`, and title scoring degrades rather than failing.
+
+*No failure isolation.* Postgres aborts the whole transaction on any statement error, so
+the fallback ran on a dead transaction and raised — and so did every later query on that
+session, including the caller's. The query now runs inside `session.begin_nested()`, so a
+failure rolls back only that savepoint.
+
+Tests, in `test_postgres_schema_and_isolation.py`, Postgres-only and skipped **loudly**
+because a skip here means unverified:
+
+- `create_all` produces `search_title`.
+- Table-by-table parity between ORM metadata and the Alembic-head schema, in both
+  directions. Guards the class of bug, not the instance; it found no other divergence.
+- A forced lexical failure leaves the session usable, and a plain `SELECT` still works.
+- A forced lexical failure does not discard the caller's staged, uncommitted work.
+- The lexical leg actually runs on a migrated schema, and the 0007 trigger populated the
+  title copy — the happy path no test covered before bug 14.
+
+Failure is injected by making only the tsvector expression invalid, not by dropping the
+column. Dropping it would also break the Python fallback, since that fallback queries
+through the ORM and the ORM now declares the column — worth recording, because after the
+parity fix **schema parity is load-bearing for the fallback too**, not only for the
+indexed query.
+
+### Bug 20: `alembic upgrade head` failed on any percent-encoded URL
+
+Found while writing those tests. `migrations/env.py` passed `database_url` straight into
+`config.set_main_option`, which writes to configparser, which reads a bare `%` as
+interpolation syntax and raises. Every unix-socket URL is percent-encoded
+(`?host=%2Ftmp`), as is any password containing a special character, so migrations were
+impossible on a URL SQLAlchemy accepts. One-line fix; verified by running
+`alembic current` against `?host=%2Ftmp`, which previously died.
+
+### Bug 18: the lexical leg, before and after
+
+Stage 1 is unchanged. Stage 2 runs **only when stage 1 returns nothing**: the query's
+terms are OR-ed and the candidates re-ranked by term coverage. Each term goes through
+`plainto_tsquery` as a bound parameter, OR-ed with the tsquery `||` operator, so a
+question containing `&`, `!` or a stray quote is data rather than an expression.
+
+What Postgres was actually being asked, for the real compound question:
+
+```
+terms            ['growth', 'per', 'cycle', 'film', 'density', 'HfO2', 'ALD']
+precise tsquery  'growth' & 'per' & 'cycl' & 'film' & 'densiti' & 'report'
+                   & 'hfo2' & 'ald' & 'sourc' & 'agre'        -> 0 hits
+relaxed tsquery  'growth' | 'per' | 'cycl' | 'film' | 'densiti' | 'hfo2' | 'ald'
+                                                              -> 7 hits
+```
+
+**Stage 2 triggers on 12 of the 12 benchmark questions.** The leg was not merely weak on
+long questions — it returned nothing for *every* question in the suite on Postgres, so
+every Postgres retrieval number ever recorded here was dense-only in effect.
+
+Measured with the leg isolated, because behind a dense leg that saturates recall on a
+47-page corpus a totally dead lexical leg is invisible:
+
+```
+metric                   lexical_only   lexical_only_relaxed
+overall_score                  0.2500                 0.8153
+doc_recall                     0.0000                 1.0000
+page_recall                    0.0000                 1.0000
+reciprocal_rank                0.0000                 0.9444
+extraction_f1                  0.0000                 0.4073
+abstention_f1                  0.4000                 0.8000
+unsupported_claim_rate         0.0000                 0.0000
+```
+
+And with both legs, which is how it would ship:
+
+```
+metric                       baseline   lexical_relaxed
+overall_score                  0.7988            0.7988
+doc_recall                     1.0000            1.0000
+page_precision                 0.7407            0.7407
+extraction_f1                  0.3549            0.3549
+unsupported_claim_rate         0.0000            0.0000
+```
+
+Identical. **So `lexical_relaxed` is not adopted as the default**, per the stated rule: it
+does not improve the overall score. It ships as a policy candidate, off by default, and
+it is provably neutral rather than untested — stage 2 ran on all twelve cases and changed
+no metric, because dense already found every answer. The fix matters for a corpus where
+dense does not saturate, and this corpus cannot show that.
+
+Twelve tests in `test_lexical_relaxed.py`: tokenisation, rare tokens kept whole (`HfO2`
+must not become `hfo` + `2`), stopword-only and no-match queries, technique filters,
+title-assisted matching, tsquery-syntax-as-data, and that a short precise question
+returns byte-identical results with the flag on.
+
+### Truth-set correction: `baseline@12-case` v1 -> v2-gold-keys
+
+§10e proved two of three "misses" were correct extractions filed under the registry keys
+`extract-v4` mandates. Resolved with an explicit alias table, `GOLD_KEY_ALIASES`, each
+entry carrying its reason; `_match_claims` stays strict and resolves aliases before
+comparing. No fuzzy matching, no substrings, no edit distance. Aliasing is not transitive
+and not reversed, and tests assert a wrong-dimension key still fails to match.
+
+The gold names keep their specificity (`substrate_temperature`, `oxygen_pressure`) rather
+than being renamed to the registry keys, so the truth set still records what the column
+meant.
+
+```
+                     v1 (INVALID)   v2-gold-keys
+extraction_f1              0.3549         0.4073
+overall_score              0.8078         0.8153
+claims missed                   3              1
+```
+
+**Every extraction metric measured under truth-set v1 is void as a baseline, including
+`extraction_f1 = 0.397` and `0.3549`.** They are not merely old: they scored a correct
+extraction as a miss. Comparisons against them must not be reused. `CASE_SET_VERSION`
+records the label.
+
+*`decomposition_onset` decision: kept.* The source states, verbatim on page 2 of the
+hotwall fixture: **"Above 320 degC it fell to 0.71 angstrom per cycle as TDMAH begins to
+decompose thermally."** "Begins to decompose thermally" tied to 320 degC *is* an onset
+claim, so the expectation is legitimate and stays. It is now the single remaining
+benchmark miss, and a real one: the extractor reads 320 degC as the condition for a
+growth-rate change rather than as a claim of its own.
+
+### Bug 21: recovering a scalar the model put in `value_text`
+
+Observed: `{"value": null, "value_text": "0.98 angstrom per cycle"}`. A claim with no
+numeric `value` is invisible to `is_comparable`, to `_match_claims` and to contradiction
+detection, so the number was read from the source and then discarded.
+
+Recovery is deliberately narrow. It requires `value is None`, exactly one numeric token,
+no range or bound marker (` to `, en/em dash, `±`, `between`, `<`, `>`, `~`, `approx`,
+` or `, `up to`, `range`, and a hyphen *between digits*), and a unit that classifies to
+the field's expected dimension through the existing guards. `value_text` and `units` are
+preserved untouched and a note records the derivation. Stricter than the rejection guard
+on purpose: that guard abstains on ignorance, while recovery *adds* a number and so only
+acts where the unit can be verified.
+
+Writing it produced a near-miss worth recording: `value_text` of "the film is monoclinic
+HfO2" contains the single number **2**, and the first version recovered `material = 2.0`
+— reproducing bug 17 exactly, the fabrication that was read downstream as "a growth per
+cycle of 2.0". Two independent guards now prevent it: the numeric pattern refuses a digit
+preceded by a letter, so a chemical formula yields no number, and categorical fields are
+skipped entirely. Both are tested; twenty-two tests cover recovery, including twelve
+parametrised range and bound forms.
+
+### Does `gpc_098` reach the brief now? No.
+
+Stated plainly because it is the acceptance test. Run against the real two-paper Postgres
+corpus under both `baseline` and `lexical_relaxed`, the brief still reports only
+`growth_per_cycle_ang = 1.42` and **no contradiction**. 0.98 is absent.
+
+None of the four fixes above touches the reason. The passage is retrieved — dense has it
+at rank 3 — and graded **1** on the compound question, so it is dropped before extraction
+runs. Step 0 measured that cause precisely: the compound form costs one grade point, and
+this passage starts one point below the 1.42 passage, so only it falls under
+`MIN_USEFUL_GRADE = 2`. The indicated remedy is per-conjunct grading, which this phase
+deliberately did not implement.
+
+The current behaviour has an unpleasant symmetry worth stating: the grader *keeps* the
+hotwall passage listing purge and dose times, whose claims the dimensional guard then
+rejects four times over, and *drops* the hotwall passage that states the value.
+
+---
+
+## 10g. Bug 22: the guards checked dimension and never magnitude
+
+Found by asking what else the §10d guards do not cover. The dimensional guard verifies
+that a claim's units are the right *kind* of quantity for its field; nothing verified the
+*scale*. So a field whose name declares a unit could hold a value in a different unit of
+the same dimension and still be marked comparable:
+
+```
+before                                                    is_comparable
+thickness_nm    = 12    'angstrom'                             True
+pressure_torr   = 100   'mTorr'                                True
+growth_..._ang  = 0.098 'nm/cycle'   (never rescaled)          -
+```
+
+12 angstrom is 1.2 nm, so the first is **ten times** the truth. 100 mTorr is 0.1 torr, so
+the second is **a thousand times**. And the third is the flagship number in disguise:
+0.098 nm/cycle *is* 0.98 A/cycle, so comparing it against 1.42 would report a **93%
+disagreement where the real one is 31%** — a fabricated scientific conclusion reached
+without a single incorrect extraction.
+
+This was live on the real corpus, not hypothetical. The brief contained
+`ok thickness_nm 12 nm`, marked comparable, from the quote "the interfacial oxide
+measured **12 angstrom**".
+
+Two mechanisms, because there were two distinct failures.
+
+**Conversion to the declared unit.** `CANONICAL_UNIT` names the unit each registry key's
+name asserts; `UNIT_FACTORS` gives the factor for each accepted spelling. Code does the
+arithmetic, never the model — the division of labour `_derive_kelvin_from_celsius`
+established. Kelvin to Celsius is handled separately because temperature is an offset
+scale, not a factor. Three outcomes and no silent fourth: already canonical, converted
+with the original recorded, or — the right dimension with an unrecognised spelling —
+kept, flagged `magnitude_unverified`, and **not comparable**, because trusting a number
+whose scale nobody established is the failure being fixed.
+
+**The quote outranks the declared units.** The live case was not a spelling this could
+convert: the model declared `units: "nm"` while its own quote said "12 angstrom". The
+declared unit and the field name agreed with each other and were both wrong about the
+source, so no guard could fire. The quote is already verified to appear verbatim in the
+passage, which makes it the better authority than a units field filled in separately.
+Deliberately narrow: it acts only when the value appears **exactly once** in the quote,
+directly followed by a unit of the same dimension that is convertible. Two occurrences
+offer two candidate units and a whole-passage quote routinely has both, so those are left
+alone.
+
+```
+after                                                     is_comparable
+thickness_nm    = 1.2   'nm'     (from "12 angstrom")           True
+pressure_torr   = 0.1   'torr'   (from 100 mTorr)               True
+growth_..._ang  = 0.98  'a/cycle' (from 0.098 nm/cycle)         -
+temperature_c   = 250   'degC'   (from 523.15 K)                True
+thickness_nm    = 12    'furlongs'  flagged, not rescaled      False
+```
+
+The real corpus now reports `ok thickness_nm 1.2 nm`.
+
+**One measurement trap this created and closed.** The first run showed `extraction_f1`
+dropping 0.4073 -> 0.3826, because the gold `oxygen_pressure 100 mTorr` was being compared
+against a claim already normalised to 0.1 torr. The fixtures are written in the source's
+own units on purpose, so the fix is to put the gold through the *same* conversion rather
+than to rewrite it: `convert_to_canonical` is now shared by `ExtractedClaim` and the
+benchmark matcher, keyed on the claim's field name. Two copies of this arithmetic would
+eventually disagree. `extraction_f1` returned to 0.4073 with the magnitude fix in place.
+
+Nineteen tests cover it, including every conversion above, the unconvertible-spelling
+flag, a value appearing twice in a quote, a cross-dimension quote, and two consistency
+checks asserting that `CANONICAL_UNIT` and `FIELD_DIMENSION` cannot drift apart.
+
+---
+
 ## 11. Known limitations and deferred work
 
 **Measured, and significant:**
@@ -1068,16 +1456,27 @@ missing one appear.
 
 **Now the top open problem:**
 
-6b. **Extraction recall, not retrieval, is the binding constraint.** `extraction_f1` is
-    0.397 after the prompt work in §10c, and on real PDFs (§10d) the extractor misses
-    `0.98 angstrom per cycle` outright, so the one genuine cross-source disagreement in
-    a two-paper corpus is never reported. Everything added in §10d makes a *wrong*
-    extraction much harder to produce; none of it makes a *missing* one appear. Three
-    benchmark claims are also still missed (`decomposition_onset_c`,
-    `substrate_temperature`, `oxygen_pressure`), all of them present in the retrieved
-    page. `extract-v5` tried to fix exactly this and measured worse, so the next attempt
-    should probably not be another prompt rule — a larger extraction model, or a second
-    pass over a page that a claim was expected on and not found, are the untried options.
+6b. ~~**Extraction recall, not retrieval, is the binding constraint.**~~ **PARTIAL —
+    and the premise was wrong.** §10e traced all five missing claims through seven stages
+    and none was an extraction-capability failure. Two were correct extractions scored as
+    misses by wrong gold keys (fixed, truth-set v2, `extraction_f1` 0.3549 -> 0.4073).
+    One is a grading loss. One is a real S3 miss (`decomposition_onset_c`, kept as a
+    legitimate expectation). The flagship `0.98` reaches the extractor correctly when it
+    is given the passage at all.
+
+    **What remains open is grading, not extraction.** `gpc_098` is graded 1 on a compound
+    question and dropped before extraction; Step 0 measured the cause as compound-question
+    dilution costing exactly one grade point, deterministically, and this passage starting
+    one point lower than the control. The 1.42-vs-0.98 disagreement is still not reported.
+    The indicated next experiment is per-conjunct grading (split a compound question,
+    grade each clause, keep the maximum) as a `ResearchPolicy` option defaulting to off,
+    judged on the benchmark — **and the benchmark needs a compound-question case first**,
+    because it currently has none and so can see the cost of such a change and none of
+    its benefit. That is the same blind spot that made `grade-v3` an unmeasured exception
+    (§10c) and made `lexical_relaxed` unmeasurable (§10f).
+
+    Still true from before: `extract-v5` tried another prompt rule and measured worse, so
+    the next attempt should not be one.
 
 **Still not exercised:**
 
