@@ -553,14 +553,6 @@ it writes is tagged `modeled`, so every score built on it returns status
 
 ---
 
-## Reference
-
-Woodel, Z. *A Non-Local Fractional Operator Formulation for Structure–Property–
-Function Transduction: Reproducible Documentation for Correlating Structural and
-Functional Material Descriptors.* 2026.
-
-Center for Nanophase Materials Sciences, Oak Ridge National Laboratory.
-
 ## License
 
 MIT — see `LICENSE`.
