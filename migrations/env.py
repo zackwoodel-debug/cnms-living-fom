@@ -26,7 +26,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+#  The "%" must be doubled: set_main_option writes into configparser, which reads a
+#  bare "%" as interpolation syntax and raises. Any percent-encoded URL hits this — a
+#  unix-socket host (``?host=%2Ftmp``) or a password containing a special character —
+#  so ``alembic upgrade head`` failed outright on a URL that SQLAlchemy accepts.
+config.set_main_option(
+    "sqlalchemy.url", get_settings().database_url.replace("%", "%%")
+)
 target_metadata = Base.metadata
 
 

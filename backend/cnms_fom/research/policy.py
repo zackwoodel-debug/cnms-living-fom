@@ -53,6 +53,10 @@ class ResearchPolicy:
     top_k: int = 6
     use_dense: bool = True
     use_lexical: bool = True
+    #  Two-stage lexical retrieval: keep the precise websearch_to_tsquery, and only
+    #  when it returns nothing, OR the query's terms and re-rank by term coverage.
+    #  Off by default because it changes retrieval, and the benchmark decides.
+    lexical_relaxed: bool = False
     #  Reciprocal-rank-fusion damping. 60 is the TREC value; exposed because it is
     #  a knob, not because it is expected to move.
     rrf_k: int = 60
@@ -205,6 +209,21 @@ CANDIDATES: dict[str, ResearchPolicy] = {
         name="focused", candidate_depth=8, top_k=3, table_weight=1.5, caption_weight=1.3,
         notes="narrow_pool plus table weighting. Half the extraction cost of the baseline, and "
         "the two improvements it combines fix different cases.",
+    ),
+    #  Isolates the lexical leg with the relaxed stage on. Exists to measure bug 18:
+    #  with dense retrieval in the mix, dense saturates recall on a 47-page corpus and
+    #  a totally dead lexical leg is invisible.
+    "lexical_only_relaxed": BASELINE.evolve(
+        name="lexical_only_relaxed", use_dense=False, lexical_relaxed=True,
+        notes="lexical_only with two-stage lexical retrieval, to measure the lexical "
+        "leg on its own rather than behind a saturated dense leg.",
+    ),
+    "lexical_relaxed": BASELINE.evolve(
+        name="lexical_relaxed", lexical_relaxed=True,
+        notes="Two-stage lexical retrieval: the precise websearch_to_tsquery first, and "
+        "only when it returns nothing, the query's terms OR-ed and re-ranked by term "
+        "coverage. Postgres-only in effect; the SQLite fallback already scores by term "
+        "overlap, so this policy is indistinguishable from the baseline there.",
     ),
 }
 

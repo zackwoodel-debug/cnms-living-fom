@@ -129,10 +129,65 @@ def tokenise(query: str) -> list[str]:
     ]
 
 
+#  Question scaffolding that carries no retrieval signal. Postgres drops true English
+#  stopwords inside plainto_tsquery on its own; these are the words that survive that
+#  and still mean nothing here, so they are excluded from the coverage denominator —
+#  otherwise a chunk is penalised for not containing the word "reported".
+_QUESTION_NOISE: frozenset[str] = frozenset({
+    "what", "which", "how", "why", "when", "where", "who", "whom", "whose",
+    "is", "are", "was", "were", "be", "been", "being", "do", "does", "did",
+    "the", "a", "an", "of", "for", "in", "on", "at", "to", "and", "or", "but",
+    "with", "from", "by", "as", "that", "this", "these", "those", "it", "its",
+    "reported", "report", "reports", "used", "use", "uses", "give", "given",
+    "tell", "show", "shows", "any", "some", "there", "their", "we", "our",
+    "value", "values", "typical", "about", "agree", "sources", "source",
+})
+
+#  Kept whole rather than split on case or digit boundaries. "HfO2" must not become
+#  "hfo" + "2", and a sample id or a named correction ("Nevot-Croce") is exactly the
+#  rare token lexical search exists to catch.
+_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-_/]*")
+
+
+def lexical_terms(query: str) -> list[str]:
+    """The query's meaningful tokens, in order, de-duplicated case-insensitively.
+
+    Used both to build the relaxed tsquery and as the denominator for term coverage,
+    so the two can never disagree about what the query was asking for.
+    """
+    seen: set[str] = set()
+    terms: list[str] = []
+    for match in _TOKEN.finditer(query):
+        token = match.group(0).strip(".-_/")
+        if not token or len(token) < 2:
+            continue
+        lowered = token.lower()
+        if lowered in _QUESTION_NOISE or lowered in seen:
+            continue
+        seen.add(lowered)
+        terms.append(token)
+    return terms
+
+
+def term_coverage(text: str, terms: list[str]) -> float:
+    """Fraction of the query's meaningful terms present in a passage.
+
+    Substring rather than token matching, deliberately: "angstrom" should count for a
+    passage writing "angstroms", and the alternative here is a second stemmer that
+    disagrees with Postgres's. It is a ranking signal, not a guard — nothing is
+    admitted or rejected on the strength of it.
+    """
+    if not terms:
+        return 0.0
+    lowered = text.lower()
+    return sum(1 for term in terms if term.lower() in lowered) / len(terms)
+
+
 def lexical_search(
     session,
     query: str,
     *,
+    relaxed: bool = False,
     k: int = CANDIDATE_DEPTH,
     techniques: list[SynthesisTechnique] | None = None,
 ) -> list[ChunkHit]:
@@ -144,12 +199,21 @@ def lexical_search(
     output still sees why a chunk placed where it did.
     """
     if _is_postgres(session):
-        return _postgres_fulltext(session, query, k=k, techniques=techniques)
+        return _postgres_fulltext(
+            session, query, k=k, techniques=techniques, relaxed=relaxed
+        )
+    #  The Python fallback already scores by term overlap, which is what the relaxed
+    #  stage reproduces in SQL, so there is nothing for the flag to change here.
     return _python_term_overlap(session, query, k=k, techniques=techniques)
 
 
 def _postgres_fulltext(
-    session, query: str, *, k: int, techniques: list[SynthesisTechnique] | None
+    session,
+    query: str,
+    *,
+    k: int,
+    techniques: list[SynthesisTechnique] | None,
+    relaxed: bool = False,
 ) -> list[ChunkHit]:
     from sqlalchemy import func, literal_column
 
@@ -179,26 +243,48 @@ def _postgres_fulltext(
     #  degrading: `.label()` on a `text()` clause raises NotImplementedError in
     #  SQLAlchemy 2.0, at construction time, so the fallback this comment promises was
     #  unreachable. A fallback that only covers execution is not a fallback.
+    #
+    #  The SAVEPOINT is the other half of the same lesson. Postgres aborts the whole
+    #  transaction on any statement error, so when this query failed the fallback below
+    #  ran on a dead transaction and raised InFailedSqlTransaction — and so did every
+    #  later query on the session, including ones belonging to the caller. Rolling back
+    #  to a savepoint discards only this query, which is what makes the fallback
+    #  reachable at all. Measured: without it, a `select count(*)` that succeeded before
+    #  this call failed after it.
     try:
-        #  literal_column, not text: it is a ColumnElement, so `.op("@@")` and
-        #  `.label()` both work. The SQL string stays byte-identical to migration
-        #  0007's index expression, which is not cosmetic — one missing space drops the
-        #  plan from a 5.7 ms index scan to a 99 ms sequential scan.
-        tsvector = literal_column(searchable)
-        tsquery = func.websearch_to_tsquery("english", query)
-        rank_expr = func.ts_rank_cd(tsvector, tsquery)
+        with session.begin_nested():
+            #  literal_column, not text: it is a ColumnElement, so `.op("@@")` and
+            #  `.label()` both work. The SQL string stays byte-identical to migration
+            #  0007's index expression, which is not cosmetic — one missing space drops
+            #  the plan from a 5.7 ms index scan to a 99 ms sequential scan.
+            tsvector = literal_column(searchable)
+            tsquery = func.websearch_to_tsquery("english", query)
+            rank_expr = func.ts_rank_cd(tsvector, tsquery)
 
-        statement = (
-            session.query(DocumentChunk, Document, rank_expr.label("rank"))
-            .join(Document, DocumentChunk.document_id == Document.id)
-            .filter(tsvector.op("@@")(tsquery))
-        )
-        if techniques:
-            statement = statement.filter(Document.technique.in_(list(techniques)))
+            statement = (
+                session.query(DocumentChunk, Document, rank_expr.label("rank"))
+                .join(Document, DocumentChunk.document_id == Document.id)
+                .filter(tsvector.op("@@")(tsquery))
+            )
+            if techniques:
+                statement = statement.filter(Document.technique.in_(list(techniques)))
 
-        rows = statement.order_by(rank_expr.desc()).limit(k).all()
+            rows = statement.order_by(rank_expr.desc()).limit(k).all()
+
+            #  Stage 2, only when stage 1 found nothing. websearch_to_tsquery ANDs its
+            #  terms, so a natural-language question demands every stem in one chunk
+            #  and matches nothing: measured, every real question in §10e returned
+            #  0 lexical hits while dense returned 7-12. Relaxing to OR recovers the
+            #  leg; term coverage is what stops OR from ranking a chunk that shares one
+            #  generic word above one that shares the material and the property.
+            if relaxed and not rows:
+                rows = _relaxed_rows(
+                    session, query, searchable, k=k, techniques=techniques
+                )
     except Exception as exc:  # noqa: BLE001 - a missing index or FTS config, not a bug in the caller
         logger.warning("Postgres full-text search failed (%s); falling back to term overlap.", exc)
+        #  The savepoint has already been rolled back by the context manager, so the
+        #  session is usable and the fallback can actually run.
         return _python_term_overlap(session, query, k=k, techniques=techniques)
 
     return [
@@ -215,6 +301,103 @@ def _postgres_fulltext(
         )
         for chunk, document, rank in rows
     ]
+
+
+def _rendered_tsqueries(session, query: str, terms: list[str]) -> dict:
+    """What Postgres actually parsed the query into, for both stages.
+
+    Asking the database rather than reconstructing it in Python: the whole failure in
+    bug 18 was a mismatch between what the query looked like and what it meant.
+    """
+    if not _is_postgres(session):
+        return {"precise": None, "relaxed": None, "note": "not a Postgres backend"}
+    from sqlalchemy import text as sql_text
+
+    out: dict = {}
+    try:
+        with session.begin_nested():
+            out["precise"] = session.execute(
+                sql_text("SELECT websearch_to_tsquery('english', :q)::text"),
+                {"q": query},
+            ).scalar()
+            if terms:
+                ored = " || ".join(
+                    f"plainto_tsquery('english', :t{i})" for i in range(len(terms))
+                )
+                out["relaxed"] = session.execute(
+                    sql_text(f"SELECT ({ored})::text"),
+                    {f"t{i}": term for i, term in enumerate(terms)},
+                ).scalar()
+            else:
+                out["relaxed"] = None
+    except Exception as exc:  # noqa: BLE001 - a diagnostic never breaks its caller
+        out["error"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
+def _relaxed_rows(
+    session,
+    query: str,
+    searchable: str,
+    *,
+    k: int,
+    techniques: list[SynthesisTechnique] | None,
+) -> list:
+    """Stage 2: OR the query's terms, then re-rank by how many of them a chunk has.
+
+    Each term goes through ``plainto_tsquery`` as a bound parameter and the results are
+    OR-ed with the tsquery ``||`` operator. That is deliberate over building a
+    ``to_tsquery`` string: a query containing ``&``, ``!`` or an unbalanced quote would
+    otherwise be tsquery syntax, and a user's question is data, not an expression.
+    Postgres also drops its own stopwords inside each call, so no stopword list here has
+    to be exhaustive.
+
+    Coverage is computed in Python rather than SQL. Doing it in SQL needs one CASE per
+    term and so a dynamically assembled statement; the candidate pool here is ``k * 4``
+    rows, and re-ranking that in Python is both cheaper and auditable.
+    """
+    from sqlalchemy import func, literal_column
+    from sqlalchemy.sql.elements import ColumnElement
+
+    from cnms_fom.db.models import Document, DocumentChunk
+
+    terms = lexical_terms(query)
+    if not terms:
+        return []
+
+    #  Annotated as ColumnElement because the `||` chain re-binds a Function to a
+    #  BinaryExpression, and both are ColumnElements.
+    tsquery: ColumnElement = func.plainto_tsquery("english", terms[0])
+    for term in terms[1:]:
+        tsquery = tsquery.op("||")(func.plainto_tsquery("english", term))
+
+    tsvector: ColumnElement = literal_column(searchable)
+    rank_expr = func.ts_rank_cd(tsvector, tsquery)
+    statement = (
+        session.query(DocumentChunk, Document, rank_expr.label("rank"))
+        .join(Document, DocumentChunk.document_id == Document.id)
+        .filter(tsvector.op("@@")(tsquery))
+    )
+    if techniques:
+        statement = statement.filter(Document.technique.in_(list(techniques)))
+
+    #  A wider pool than k, because ts_rank_cd alone is the thing being corrected.
+    candidates = statement.order_by(rank_expr.desc()).limit(max(k * 4, k)).all()
+
+    #  Coverage first, ts_rank_cd as the tiebreak. Scored over title + text to match
+    #  what the tsvector indexes: a table row carries none of its document's subject.
+    def score(row) -> tuple[float, float]:
+        chunk, document, rank = row
+        haystack = f"{document.title or ''} {chunk.text}"
+        return (term_coverage(haystack, terms), float(rank))
+
+    ranked = sorted(candidates, key=score, reverse=True)[:k]
+    logger.debug(
+        "Relaxed lexical stage: %d terms, %d candidates, %d returned (top coverage %.2f)",
+        len(terms), len(candidates), len(ranked),
+        score(ranked[0])[0] if ranked else 0.0,
+    )
+    return ranked
 
 
 def _python_term_overlap(
@@ -316,6 +499,7 @@ def hybrid_search(
     depth: int = CANDIDATE_DEPTH,
     use_lexical: bool = True,
     use_vector: bool = True,
+    lexical_relaxed: bool = False,
 ) -> list[FusedHit]:
     """Retrieve with both retrievers and fuse.
 
@@ -350,7 +534,10 @@ def hybrid_search(
             lists["vector"] = []
 
     if use_lexical:
-        lists["lexical"] = lexical_search(session, query, k=depth, techniques=techniques)
+        lists["lexical"] = lexical_search(
+            session, query, k=depth, techniques=techniques,
+            relaxed=lexical_relaxed,
+        )
 
     if not any(lists.values()):
         if dense_failure is not None:
@@ -361,7 +548,12 @@ def hybrid_search(
 
 
 def retrieval_diagnostics(
-    session, query: str, *, techniques: list[SynthesisTechnique] | None = None, depth: int = 10
+    session,
+    query: str,
+    *,
+    techniques: list[SynthesisTechnique] | None = None,
+    depth: int = 10,
+    lexical_relaxed: bool = False,
 ) -> dict:
     """Side-by-side view of what each retriever found, and what fusion did.
 
@@ -378,13 +570,39 @@ def retrieval_diagnostics(
     except Exception as exc:  # noqa: BLE001
         dense_error = str(exc)
 
-    lexical = lexical_search(session, query, k=depth, techniques=techniques)
+    #  Both stages separately, because "lexical found nothing" and "lexical found
+    #  nothing until it was relaxed" are different answers to the question this
+    #  function exists for.
+    precise = lexical_search(session, query, k=depth, techniques=techniques)
+    lexical = precise
+    relaxed_ran = False
+    if lexical_relaxed and not precise:
+        lexical = lexical_search(
+            session, query, k=depth, techniques=techniques, relaxed=True
+        )
+        relaxed_ran = True
+
     fused = reciprocal_rank_fusion({"vector": dense, "lexical": lexical})
+    terms = lexical_terms(query)
 
     return {
         "query": query,
         "terms": tokenise(query),
+        "lexical_terms": terms,
         "lexical_backend": "postgres_fulltext" if _is_postgres(session) else "python_term_overlap",
+        "lexical_stages": {
+            "precise_hits": len(precise),
+            "relaxed_requested": lexical_relaxed,
+            "relaxed_ran": relaxed_ran,
+            "relaxed_hits": len(lexical) if relaxed_ran else None,
+            "tsquery": _rendered_tsqueries(session, query, terms),
+            "coverage": [
+                {"chunk_id": h.chunk_id, "coverage": round(
+                    term_coverage(f"{h.document_title or ''} {h.text}", terms), 3
+                )}
+                for h in lexical
+            ],
+        },
         "dense_error": dense_error,
         "vector": [
             {"chunk_id": h.chunk_id, "citation": h.citation, "similarity": h.similarity}

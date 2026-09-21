@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -231,6 +232,47 @@ FIELD_DIMENSION: dict[str, str] = {
     "temperature_c": "temperature",
 }
 
+#  A registry key whose *name* declares a unit, and the factor that converts each
+#  accepted spelling into it. Keys are the normalised form produced by
+#  ``_normalised_unit`` below.
+#
+#  This exists because the dimensional guard checks dimension and never magnitude, so a
+#  field named ``_nm`` could hold a value in angstrom and still be marked comparable.
+#  Observed on the real corpus: the extractor emitted
+#  ``{"field": "thickness_nm", "value": 12, "units": "nm"}`` from the quote "the
+#  interfacial oxide measured 12 angstrom". 12 angstrom is 1.2 nm, so the stored number
+#  was ten times the truth and flagged ``ok``. A legitimate "0.098 nm/cycle" has the same
+#  shape: it is exactly 0.98 A/cycle, and comparing 0.098 against 1.42 would report a
+#  93% disagreement where the real one is 31%.
+#
+#  Code does the arithmetic, never the model — the same division of labour as
+#  ``_derive_kelvin_from_celsius``. Factors are exact where the definition is exact and
+#  are the conventional values otherwise.
+CANONICAL_UNIT: dict[str, str] = {
+    "growth_per_cycle_ang": "a/cycle",
+    "growth_rate_nm_min": "nm/min",
+    "thickness_nm": "nm",
+    "roughness_ang": "a",
+    "pressure_torr": "torr",
+    "temperature_c": "degc",
+}
+
+UNIT_FACTORS: dict[str, dict[str, float]] = {
+    "a/cycle": {"a/cycle": 1.0, "nm/cycle": 10.0, "pm/cycle": 0.01},
+    #  1 A/s = 0.1 nm/s = 6 nm/min.
+    "nm/min": {"nm/min": 1.0, "nm/s": 60.0, "a/s": 6.0, "a/min": 0.1, "um/min": 1000.0},
+    "nm": {"nm": 1.0, "a": 0.1, "um": 1000.0, "mm": 1e6, "cm": 1e7, "m": 1e9, "pm": 0.001},
+    "a": {"a": 1.0, "nm": 10.0, "pm": 0.01, "um": 10_000.0},
+    #  760 torr = 1 atm exactly; 1 torr = 101325/760 Pa.
+    "torr": {
+        "torr": 1.0, "mtorr": 0.001, "pa": 760.0 / 101_325.0,
+        "kpa": 760_000.0 / 101_325.0, "mbar": 76.0 / 101.325,
+        "bar": 76_000.0 / 101.325, "atm": 760.0, "psi": 760.0 / 14.695_948_775_5,
+    },
+    #  Temperature is an offset scale, so it is handled in code rather than by a factor.
+    "degc": {"degc": 1.0},
+}
+
 #  Context fields that name a category, not a quantity. A *numeric* claim filed under
 #  one of these is the extractor confusing the field slot with the context slot, and it
 #  is not harmless: an extraction of ``material = 2`` was read by the interpretation
@@ -250,6 +292,71 @@ CATEGORICAL_CONTEXT_FIELDS: frozenset[str] = frozenset({
 DIMENSIONLESS_FIELDS: frozenset[str] = frozenset(
     {"k", "eps_inf", "eps_ionic", "tan_delta"}
 )
+
+
+#  Wording that makes a value_text a range, a bound or an estimate rather than a single
+#  number. Any of these present means no scalar is recovered: inventing 0.98 from
+#  "0.9 to 1.1" or from "< 1.0" would be a fabrication with a citation attached.
+_NOT_A_SCALAR = (
+    " to ", "\u2013", "\u2014", "\u00b1", "+/-", "between", "<", ">", "~",
+    "approx", "approximately", " or ", "least", "most", "above", "below", "over",
+    "under", "up to", "range",
+)
+#  A number, allowing a leading sign, decimals and exponents — but never a digit that
+#  belongs to a chemical formula. The lookbehind is load-bearing: without it "HfO2"
+#  yields the single number 2, and recovering that for a `material` claim manufactures
+#  exactly the `material = 2` fabrication that §10d's bug 17 was written to stop. A
+#  trailing letter is still allowed so "12nm" reads as 12.
+_NUMERIC_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9.])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+)
+#  A hyphen *between digits* is a range ("0.9-1.1"); a leading one is a sign, and one
+#  inside a word is part of a name like Nevot-Croce.
+_DIGIT_RANGE = re.compile(r"\d\s*-\s*\d")
+
+
+def convert_to_canonical(
+    field_name: str, value: float | None, units: str | None
+) -> tuple[float | None, str | None, bool]:
+    """``(value, units)`` expressed in the unit ``field_name`` declares.
+
+    Returns ``(value, units, converted)``. ``converted`` is False both when nothing
+    needed doing and when the units are the right dimension but no conversion is known —
+    the caller distinguishes those, because only the second is a reason to refuse a
+    comparison.
+
+    Shared by ``ExtractedClaim`` and by the benchmark's matcher on purpose. A gold value
+    written in the source's units ("oxygen_pressure 100 mTorr") has to be compared
+    against a claim already normalised to torr, and two copies of this arithmetic would
+    eventually disagree.
+    """
+    canonical = CANONICAL_UNIT.get(field_name)
+    if canonical is None or value is None:
+        return value, units, False
+    stated = _normalised_unit(units)
+    if not stated or stated == canonical:
+        return value, units, False
+    if canonical == "degc" and stated in {"k", "degk", "kelvin"}:
+        return round(value - 273.15, 4), "degC", True
+    factor = UNIT_FACTORS.get(canonical, {}).get(stated)
+    if factor is None:
+        return value, units, False
+    return value * factor, canonical, True
+
+
+def _normalised_unit(units: str | None) -> str:
+    """A unit string reduced to the spelling the factor tables are keyed on."""
+    text = (units or "").strip().lower().replace(" per ", "/").replace("\u00b7", "")
+    text = "".join(text.split())
+    text = text.lstrip("0123456789.,+-\u00b1")
+    for variant in ("\u00e5ngstr\u00f6m", "\u00c5", "\u212b", "angstroms", "angstrom"):
+        text = text.replace(variant.lower(), "a")
+    text = text.replace("\u00b0c", "degc").replace("celsius", "degc")
+    text = text.replace("degreec", "degc").replace("degc.", "degc")
+    text = text.replace("micron", "um").replace("\u00b5", "u")
+    text = text.replace("/cy", "/cycle").replace("/cyclecle", "/cycle")
+    text = text.replace("/sec", "/s").replace("/minute", "/min").replace("/hour", "/h")
+    return text
 
 
 def classify_unit(units: str | None) -> str | None:
@@ -330,6 +437,10 @@ class ExtractedClaim:
     prompt_version: str = ""
     extracted_at: datetime = field(default_factory=_utcnow)
     notes: str = ""
+    #  True when the units are the right *kind* of quantity for this field but their
+    #  magnitude relative to the unit the field name declares could not be established.
+    #  Such a value is readable and not comparable: the number's scale is unknown.
+    magnitude_unverified: bool = False
 
     def __post_init__(self) -> None:
         if not (self.field_name or "").strip():
@@ -356,9 +467,173 @@ class ExtractedClaim:
             self.notes = (
                 f"{self.notes} [unrecognised context keys: {sorted(unknown)}]".strip()
             )
+        self._recover_scalar_from_value_text()
         self._reject_dimensionally_impossible_units()
+        self._reconcile_units_with_the_quote()
+        self._normalise_to_the_unit_its_name_declares()
         self._quarantine_mislabelled_units()
         self._derive_kelvin_from_celsius()
+
+    def _reconcile_units_with_the_quote(self) -> None:
+        """When the declared units contradict the claim's own quote, the quote wins.
+
+        Observed on the real corpus: the extractor emitted
+        ``{"field": "thickness_nm", "value": 12, "units": "nm"}`` from the quote **"the
+        interfacial oxide measured 12 angstrom"**. Nothing caught it, because the
+        declared unit and the field name agreed with each other — they were just both
+        wrong about the source. 12 angstrom is 1.2 nm, and the claim read ``ok``.
+
+        The quote is already verified to appear verbatim in the passage, so it is the
+        better authority than a units field the model filled in separately. Deliberately
+        narrow: it acts only when the value appears exactly once in the quote and is
+        directly followed by a unit of the same dimension that is convertible. A quote
+        holding the number twice, or an unrecognised trailing token, is left alone.
+        """
+        if self.value is None or not self.evidence:
+            return
+        quote = (self.evidence[0].quote or "").strip()
+        declared = _normalised_unit(self.units)
+        if not quote or not declared:
+            return
+
+        rendered = f"{self.value:g}"
+        if quote.count(rendered) != 1:
+            #  Ambiguous or absent: two occurrences give two candidate units, and a
+            #  whole-passage quote (used when the model's own quote failed verification)
+            #  routinely has both.
+            return
+        after = quote[quote.index(rendered) + len(rendered):]
+        match = re.match(r"\s*([A-Za-z\u00c5\u212b\u00b0][A-Za-z\u00c5\u212b\u00b0/.^\-]*"
+                         r"(?:\s+per\s+\w+|/\w+)?)", after)
+        if not match:
+            return
+        from_quote = _normalised_unit(match.group(1))
+        if not from_quote or from_quote == declared:
+            return
+
+        #  Only when both are the same kind of quantity and the source's unit is one this
+        #  code can convert. Anything else is a disagreement to report, not to resolve.
+        canonical = CANONICAL_UNIT.get(self.field_name)
+        if canonical is None or from_quote not in UNIT_FACTORS.get(canonical, {}):
+            return
+        if classify_unit(from_quote) != classify_unit(declared):
+            return
+
+        self.notes = (
+            f"{self.notes} [declared units {self.units!r} contradict the quote, which "
+            f"reads {rendered} {match.group(1).strip()!r}; the quote was taken as "
+            f"authoritative]"
+        ).strip()
+        self.units = match.group(1).strip()
+
+    def _normalise_to_the_unit_its_name_declares(self) -> None:
+        """Convert a value into the unit the field name declares, or refuse to compare it.
+
+        A field called ``thickness_nm`` holding 12 with units "angstrom" is not a unit
+        problem, it is a *wrong number*: 12 angstrom is 1.2 nm, and the dimensional guard
+        passes it because both are lengths. Three outcomes, and no silent fourth:
+
+        * already canonical -> untouched;
+        * a known variant -> converted here, in code, with the original recorded;
+        * the right dimension but an unrecognised spelling -> kept, flagged, and
+          **not comparable**, because the alternative is trusting a number whose scale
+          nobody has established.
+
+        ``units`` becomes the canonical spelling so the claim is internally consistent.
+        The quote and the note preserve what the source actually wrote.
+        """
+        canonical = CANONICAL_UNIT.get(self.field_name)
+        if canonical is None or self.value is None:
+            return
+        stated = _normalised_unit(self.units)
+        if not stated or stated == canonical:
+            return
+
+        original, original_units = self.value, self.units
+        value, units, converted = convert_to_canonical(
+            self.field_name, self.value, self.units
+        )
+        if converted:
+            self.value, self.units = value, units
+            self.notes = (
+                f"{self.notes} [converted {original} {original_units!r} to {self.value} "
+                f"{self.units!r}, the unit {self.field_name} declares]"
+            ).strip()
+            return
+
+        #  Same dimension (the guard already checked) but an unknown spelling, so the
+        #  magnitude cannot be established. Reported, not guessed at.
+        self.magnitude_unverified = True
+        self.notes = (
+            f"{self.notes} [units {self.units!r} are the right kind of quantity for "
+            f"{self.field_name}, which declares {canonical!r}, but no conversion is "
+            f"known; the value has NOT been rescaled and cannot be compared]"
+        ).strip()
+
+    def _recover_scalar_from_value_text(self) -> None:
+        """Fill ``value`` from a ``value_text`` that holds exactly one number.
+
+        Observed on a real extraction: the model emitted
+        ``{"value": null, "value_text": "0.98 angstrom per cycle"}``. A claim with no
+        numeric ``value`` is invisible to ``is_comparable``, to the benchmark's matcher
+        and to contradiction detection, so the number was read from the source and then
+        silently discarded.
+
+        Deliberately narrow. The scalar is recovered only when the text is unambiguously
+        one number with a unit that can belong to this field; a range, a bound, an
+        estimate or two numbers leaves ``value`` as ``None``, because a citation
+        attached to a number nobody wrote is worse than a missing value.
+        ``value_text`` and ``units`` are both preserved exactly as the model gave them.
+        """
+        if self.value is not None or not (self.value_text or "").strip():
+            return
+        value_text = self.value_text or ""
+        if self.field_name in CATEGORICAL_CONTEXT_FIELDS:
+            #  A category can never carry a number, so there is nothing here to
+            #  recover and every candidate is a misreading. Belt and braces with the
+            #  formula lookbehind above: either alone would have let `material = 2`
+            #  through from "monoclinic HfO2".
+            return
+        text = value_text.strip()
+        lowered = f" {text.lower()} "
+        if any(marker in lowered for marker in _NOT_A_SCALAR):
+            return
+        if _DIGIT_RANGE.search(text):
+            return
+        numbers = _NUMERIC_TOKEN.findall(text)
+        if len(numbers) != 1:
+            return
+
+        #  The unit to check: what the model declared, else whatever follows the number.
+        remainder = _NUMERIC_TOKEN.sub("", text, count=1).strip()
+        unit_text = (self.units or "").strip() or remainder
+        expected = FIELD_DIMENSION.get(self.field_name)
+        if expected is not None and classify_unit(unit_text) != expected:
+            #  Either the unit is wrong for this field or it is unrecognised. Recovery
+            #  *adds* a number, so it only happens where the unit can be verified —
+            #  stricter than the rejection guard, which abstains on ignorance.
+            return
+        if self.field_name in DIMENSIONLESS_FIELDS and classify_unit(unit_text) is not None:
+            return
+
+        try:
+            recovered = float(numbers[0])
+        except ValueError:  # pragma: no cover - the regex guarantees a float
+            return
+        self.value = recovered
+        recorded_units = ""
+        if not (self.units or "").strip() and remainder:
+            #  The unit came from the source's own value_text and was just validated
+            #  against this field's dimension. Recording it is what lets the magnitude
+            #  normalisation below act: without it a recovered "12 angstrom" keeps
+            #  value 12 under a field named _nm, which is the ten-times error this
+            #  whole area exists to stop.
+            self.units = remainder
+            recorded_units = f"; units taken from value_text as {remainder!r}"
+        self.notes = (
+            f"{self.notes} [value {recovered} recovered from value_text "
+            f"{text!r}, which the model left non-numeric{recorded_units}]"
+        ).strip()
 
     def _reject_dimensionally_impossible_units(self) -> None:
         """Refuse a registry-keyed claim whose units cannot belong to that quantity.
@@ -465,6 +740,7 @@ class ExtractedClaim:
         return (
             self.value is not None
             and bool(self.units)
+            and not self.magnitude_unverified
             and self.is_context_complete
             and any(item.is_locatable for item in self.evidence)
         )

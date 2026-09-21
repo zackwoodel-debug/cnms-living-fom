@@ -653,6 +653,20 @@ class DocumentChunk(Base, TimestampMixin):
     n_tokens: Mapped[int | None] = mapped_column(Integer)
     embedding_model: Mapped[str | None] = mapped_column(String(64))
     embedding = mapped_column(embedding_column_type(), nullable=True)
+    #  A copy of ``documents.title``, because the lexical retriever scores title +
+    #  text and a Postgres functional index cannot span two tables (migration 0007).
+    #
+    #  Declared here as well as in the migration for schema parity, and that parity is
+    #  not cosmetic: while this column existed only in the migration, any schema built
+    #  by ``metadata.create_all`` lacked it, the Postgres lexical query raised
+    #  ``UndefinedColumn``, and the documented fallback then failed too because the
+    #  transaction was already aborted — poisoning every later query on that session.
+    #
+    #  On Postgres the value is maintained by the two triggers in migration 0007. A
+    #  ``create_all`` schema has the column but no triggers, so it stays NULL; the
+    #  query wraps it in ``coalesce``, so that degrades to text-only scoring rather
+    #  than failing. Slower and less precise, never broken.
+    search_title: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     document: Mapped[Document] = relationship(back_populates="chunks")
 

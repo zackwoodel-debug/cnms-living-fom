@@ -22,6 +22,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from cnms_fom.research.benchmark.cases import BenchmarkCase, get_case_set, seed_corpus
 from cnms_fom.research.benchmark.evaluate import BenchmarkResult, evaluate_case
@@ -193,8 +194,13 @@ def run_benchmark(
     and prompt version, so a changed prompt or model misses rather than lies.
     ``cache_path=None`` disables it and restores the cold-cache behaviour.
     """
-    if cache_path is _USE_DEFAULT_CACHE:
-        cache_path = DEFAULT_CACHE_PATH
+    #  Narrowed to a concrete type here so the sentinel does not leak into _cache_db's
+    #  signature; the sentinel exists only to distinguish "not passed" from "no cache".
+    resolved_cache_path: Path | str | None = (
+        DEFAULT_CACHE_PATH
+        if cache_path is _USE_DEFAULT_CACHE
+        else cast("Path | str | None", cache_path)
+    )
     policy = policy or BASELINE
     cases = get_case_set(case_set)
     extracting = provider is not None
@@ -209,7 +215,7 @@ def run_benchmark(
     )
 
     try:
-        with _throwaway_db(database_url) as db, _cache_db(cache_path) as cache:
+        with _throwaway_db(database_url) as db, _cache_db(resolved_cache_path) as cache:
             seed_corpus(db, embed=embed_corpus)
             db.commit()
 
@@ -517,8 +523,11 @@ def compare_policies(
     """
     from cnms_fom.research.policy import get_policy
 
-    if cache_path is _USE_DEFAULT_CACHE:
-        cache_path = DEFAULT_CACHE_PATH
+    resolved_cache_path: Path | str | None = (
+        DEFAULT_CACHE_PATH
+        if cache_path is _USE_DEFAULT_CACHE
+        else cast("Path | str | None", cache_path)
+    )
     ordered = ["baseline"] + [name for name in names if name != "baseline"]
     outcomes: dict[str, RunOutcome] = {}
     baseline_result: BenchmarkResult | None = None
@@ -527,7 +536,7 @@ def compare_policies(
         outcome = run_benchmark(
             policy=get_policy(name), case_set=case_set, provider=provider,
             baseline=baseline_result, results_path=results_path,
-            embed_corpus=embed_corpus, cache_path=cache_path,
+            embed_corpus=embed_corpus, cache_path=resolved_cache_path,
         )
         outcomes[name] = outcome
         if name == "baseline":

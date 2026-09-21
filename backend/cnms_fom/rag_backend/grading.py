@@ -345,6 +345,7 @@ def retrieve_with_correction(
     depth: int = 12,
     use_vector: bool = True,
     use_lexical: bool = True,
+    lexical_relaxed: bool = False,
     cache_db=None,
 ) -> RetrievalOutcome:
     """Hybrid retrieve, grade, and retry once with a rewritten query if needed.
@@ -383,6 +384,7 @@ def retrieve_with_correction(
             min_similarity=min_similarity,
             use_vector=use_vector,
             use_lexical=use_lexical,
+            lexical_relaxed=lexical_relaxed,
         )
         record = {
             "attempt": attempt + 1,

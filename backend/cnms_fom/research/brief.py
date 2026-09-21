@@ -485,6 +485,7 @@ def _retrieve(
             depth=policy.candidate_depth,
             use_vector=policy.use_dense,
             use_lexical=policy.use_lexical,
+            lexical_relaxed=policy.lexical_relaxed,
             cache_db=cache_db,
         )
     except ImportError as exc:

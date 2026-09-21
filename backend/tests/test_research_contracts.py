@@ -497,10 +497,16 @@ def test_a_dose_time_cannot_be_a_growth_per_cycle():
 
 
 def test_the_real_growth_per_cycle_is_accepted():
-    """The guard must not reject the values it exists to protect."""
-    for units in ("A/cycle", "angstrom per cycle", "Å/cy", "nm/cycle"):
+    """The guard must not reject the values it exists to protect.
+
+    Spellings that already *mean* angstrom-per-cycle are left exactly as written; only a
+    different magnitude is rewritten, which the next test covers.
+    """
+    for units in ("A/cycle", "angstrom per cycle", "\u00c5/cy"):
         claim = _claim(field_name="growth_per_cycle_ang", value=1.42, units=units)
         assert claim.units == units
+        assert claim.value == pytest.approx(1.42)
+        assert claim.magnitude_unverified is False
 
 
 def test_a_dimensionless_property_rejects_a_physical_unit():
@@ -572,3 +578,301 @@ def test_a_non_numeric_category_statement_is_still_allowed():
     claim = _claim(field_name="material", value=None, units=None,
                    value_text="the film is monoclinic HfO2")
     assert claim.value_text == "the film is monoclinic HfO2"
+
+
+# --- value_text scalar recovery (bug 20) ----------------------------------
+#
+# Observed on a real extraction: {"value": null, "value_text": "0.98 angstrom per
+# cycle"}. A claim with no numeric value is invisible to is_comparable, to the
+# benchmark's matcher and to contradiction detection, so the number was read from the
+# source and then silently discarded.
+
+
+def test_a_single_scalar_in_value_text_is_recovered():
+    claim = _claim(
+        field_name="growth_per_cycle_ang", value=None, units="angstrom per cycle",
+        value_text="0.98 angstrom per cycle",
+    )
+    assert claim.value == pytest.approx(0.98)
+    #  What the model said is preserved; recovery adds, it does not rewrite.
+    assert claim.value_text == "0.98 angstrom per cycle"
+    assert claim.units == "angstrom per cycle"
+    assert "recovered from value_text" in claim.notes
+
+
+def test_recovery_makes_the_claim_visible_to_comparison():
+    """The point of the fix: a value_text-only claim could not be compared at all."""
+    claim = _claim(
+        field_name="growth_per_cycle_ang", value=None, units="A/cycle",
+        value_text="0.98 A/cycle",
+        context={"technique": "ald", "precursor": "TDMAH", "chamber": "hot-wall",
+                 "temperature_c": 250},
+    )
+    assert claim.is_comparable is True
+
+
+@pytest.mark.parametrize(
+    "value_text",
+    [
+        "0.9 to 1.1 angstrom per cycle",
+        "0.9-1.1 angstrom per cycle",
+        "0.9 – 1.1 angstrom per cycle",
+        "0.98 ± 0.05 angstrom per cycle",
+        "< 1.0 angstrom per cycle",
+        "> 1.0 angstrom per cycle",
+        "about 1 to 2 angstrom per cycle",
+        "approximately 1.0 angstrom per cycle",
+        "between 0.9 and 1.1 angstrom per cycle",
+        "up to 1.0 angstrom per cycle",
+        "~1.0 angstrom per cycle",
+        "1.0 or 1.2 angstrom per cycle",
+    ],
+)
+def test_a_range_or_bound_is_never_recovered(value_text):
+    """A citation attached to a number nobody wrote is worse than a missing value."""
+    claim = _claim(
+        field_name="growth_per_cycle_ang", value=None, units="angstrom per cycle",
+        value_text=value_text,
+    )
+    assert claim.value is None, f"recovered a scalar from {value_text!r}"
+    assert claim.is_comparable is False
+
+
+def test_a_scalar_with_an_incompatible_unit_is_not_recovered():
+    """A dose time must not become a growth per cycle by way of value_text."""
+    claim = _claim(field_name="rho", value=None, units=None, value_text="6 s")
+    assert claim.value is None
+
+
+def test_an_unrecognised_unit_is_not_recovered_for_a_dimensioned_field():
+    """Recovery adds a number, so it abstains where it cannot verify the unit.
+
+    Stricter than the rejection guard, which keeps an unclassifiable unit.
+    """
+    claim = _claim(field_name="rho", value=None, units=None, value_text="8.7 widgets")
+    assert claim.value is None
+
+
+def test_a_chemical_formula_digit_is_never_recovered_as_a_value():
+    """Regression for the near-miss: "monoclinic HfO2" yields the number 2.
+
+    Recovering that reproduced bug 17 exactly — `material = 2` was read downstream as
+    "a growth per cycle of 2.0".
+    """
+    claim = _claim(
+        field_name="material", value=None, units=None,
+        value_text="the film is monoclinic HfO2",
+    )
+    assert claim.value is None
+
+    #  And for a field that *could* hold a number, the formula digit still must not.
+    unconstrained = _claim(
+        field_name="phase_note", value=None, units=None,
+        value_text="monoclinic HfO2 throughout",
+    )
+    assert unconstrained.value is None
+
+
+def test_a_dimensionless_field_rejects_a_united_value_text():
+    claim = _claim(field_name="k", value=None, units=None, value_text="18.5 Torr")
+    assert claim.value is None
+
+
+def test_a_unit_attached_to_the_number_still_recovers():
+    claim = _claim(field_name="thickness_nm", value=None, units=None, value_text="12nm")
+    assert claim.value == pytest.approx(12.0)
+
+
+def test_an_existing_value_is_never_overwritten():
+    claim = _claim(
+        field_name="growth_per_cycle_ang", value=1.42, units="A/cycle",
+        value_text="0.98 A/cycle",
+    )
+    assert claim.value == pytest.approx(1.42)
+    assert "recovered" not in claim.notes
+
+
+def test_two_numbers_leave_the_value_alone():
+    claim = _claim(
+        field_name="growth_per_cycle_ang", value=None, units="A/cycle",
+        value_text="1.42 and 0.98 A/cycle",
+    )
+    assert claim.value is None
+
+
+# --- unit magnitude, not just dimension ------------------------------------
+#
+# The dimensional guard checks the *kind* of quantity and never its scale, so a field
+# named thickness_nm could hold a value in angstrom and still read as comparable.
+# Observed on the real corpus: the extractor emitted thickness_nm = 12 'nm' from the
+# quote "the interfacial oxide measured 12 angstrom". 12 angstrom is 1.2 nm.
+
+
+def test_a_length_in_angstrom_is_converted_to_the_nm_the_field_name_declares():
+    claim = _claim(field_name="thickness_nm", value=12.0, units="angstrom")
+    assert claim.value == pytest.approx(1.2)
+    assert claim.units == "nm"
+    assert "converted 12.0" in claim.notes
+
+
+def test_a_pressure_in_millitorr_is_converted_to_torr():
+    claim = _claim(field_name="pressure_torr", value=100.0, units="mTorr")
+    assert claim.value == pytest.approx(0.1)
+    assert claim.units == "torr"
+
+
+def test_a_growth_rate_in_nm_per_cycle_becomes_angstrom_per_cycle():
+    """The flagship number: 0.098 nm/cycle IS 0.98 A/cycle.
+
+    Comparing 0.098 against 1.42 would report a 93% disagreement where the real one
+    is 31%.
+    """
+    claim = _claim(field_name="growth_per_cycle_ang", value=0.098, units="nm/cycle")
+    assert claim.value == pytest.approx(0.98)
+    assert claim.units == "a/cycle"
+
+
+def test_kelvin_becomes_celsius_by_offset_not_by_a_factor():
+    claim = _claim(field_name="temperature_c", value=523.15, units="K")
+    assert claim.value == pytest.approx(250.0)
+    assert claim.units == "degC"
+
+
+def test_a_canonical_value_is_left_completely_alone():
+    claim = _claim(field_name="thickness_nm", value=12.0, units="nm")
+    assert claim.value == pytest.approx(12.0)
+    assert claim.units == "nm"
+    assert claim.notes == ""
+
+
+def test_an_unconvertible_spelling_is_flagged_and_not_comparable():
+    """The honest middle: readable, and explicitly not comparable.
+
+    Silently trusting a number whose scale nobody established is the failure mode this
+    whole guard exists to prevent, so an unknown spelling must not simply pass.
+    """
+    claim = _claim(
+        field_name="thickness_nm", value=12.0, units="furlongs",
+        context={"temperature_k": 300.0, "frequency_hz": 1e4},
+    )
+    assert claim.value == pytest.approx(12.0), "the number must not be rescaled by guesswork"
+    assert claim.magnitude_unverified is True
+    assert claim.is_comparable is False
+    assert "no conversion is known" in claim.notes
+
+
+def test_a_field_whose_name_declares_no_unit_is_untouched():
+    """Only a unit-declaring name asserts a scale."""
+    claim = _claim(field_name="rho", value=8.7, units="g/cm3")
+    assert claim.value == pytest.approx(8.7)
+    assert claim.units == "g/cm3"
+    assert claim.magnitude_unverified is False
+
+
+def test_a_claim_with_no_units_is_not_rescaled():
+    claim = _claim(field_name="thickness_nm", value=12.0, units=None)
+    assert claim.value == pytest.approx(12.0)
+    assert claim.magnitude_unverified is False
+
+
+def test_conversion_applies_after_value_text_recovery():
+    """A recovered scalar must be normalised too, not left in the source's unit."""
+    claim = _claim(
+        field_name="thickness_nm", value=None, units=None,
+        value_text="12 angstrom",
+    )
+    assert claim.value == pytest.approx(1.2)
+    assert claim.units == "nm"
+
+
+def test_every_canonical_unit_has_an_identity_factor():
+    """A canonical unit missing from its own table would convert nothing."""
+    from cnms_fom.research.contracts import CANONICAL_UNIT, UNIT_FACTORS
+
+    for field_name, canonical in CANONICAL_UNIT.items():
+        assert canonical in UNIT_FACTORS, f"{field_name} declares {canonical}, untabulated"
+        assert UNIT_FACTORS[canonical][canonical] == 1.0, canonical
+
+
+def test_every_canonical_unit_classifies_to_its_field_dimension():
+    """The two tables must agree, or a conversion would fight the rejection guard."""
+    from cnms_fom.research.contracts import (
+        CANONICAL_UNIT,
+        FIELD_DIMENSION,
+        classify_unit,
+    )
+
+    for field_name, canonical in CANONICAL_UNIT.items():
+        expected = FIELD_DIMENSION.get(field_name)
+        if expected is None:
+            continue
+        assert classify_unit(canonical) == expected, (
+            f"{field_name}: canonical {canonical!r} classifies as "
+            f"{classify_unit(canonical)}, but the field expects {expected}"
+        )
+
+
+# --- the quote outranks the declared units ---------------------------------
+#
+# The live failure: {"field": "thickness_nm", "value": 12, "units": "nm"} from the
+# quote "the interfacial oxide measured 12 angstrom". The declared unit and the field
+# name agreed with each other and were both wrong about the source, so no guard fired
+# and the claim read `ok` while being ten times the truth.
+
+
+def _quoted(field_name: str, value: float, units: str, quote: str):
+    return ExtractedClaim(
+        field_name=field_name, value=value, units=units, tier=ClaimTier.MEASURED,
+        evidence=[_evidence(quote=quote)],
+    )
+
+
+def test_a_declared_unit_contradicting_the_quote_is_corrected():
+    claim = _quoted(
+        "thickness_nm", 12.0, "nm", "the interfacial oxide measured 12 angstrom"
+    )
+    assert claim.value == pytest.approx(1.2)
+    assert "contradict the quote" in claim.notes
+
+
+def test_a_declared_unit_agreeing_with_the_quote_is_untouched():
+    claim = _quoted(
+        "growth_per_cycle_ang", 1.42, "A/cycle",
+        "the growth per cycle saturated at 1.42 angstrom per cycle",
+    )
+    assert claim.value == pytest.approx(1.42)
+    assert claim.units == "A/cycle"
+    assert "contradict" not in claim.notes
+
+
+def test_a_value_appearing_twice_in_the_quote_is_left_alone():
+    """Two occurrences give two candidate units, so there is no single answer."""
+    claim = _quoted(
+        "thickness_nm", 12.0, "nm", "12 angstrom initially, then 12 nm after anneal"
+    )
+    assert claim.value == pytest.approx(12.0)
+    assert "contradict" not in claim.notes
+
+
+def test_a_value_absent_from_the_quote_is_left_alone():
+    claim = _quoted("thickness_nm", 99.0, "nm", "the oxide measured 12 angstrom")
+    assert claim.value == pytest.approx(99.0)
+
+
+def test_an_unrecognised_trailing_token_is_left_alone():
+    claim = _quoted("thickness_nm", 12.0, "nm", "the oxide measured 12 widgets across")
+    assert claim.value == pytest.approx(12.0)
+    assert "contradict" not in claim.notes
+
+
+def test_a_cross_dimension_quote_does_not_rewrite_the_value():
+    """A time in the quote must not silently become a length."""
+    claim = _quoted("thickness_nm", 6.0, "nm", "a 6 s purge followed each dose")
+    assert claim.value == pytest.approx(6.0)
+    assert "contradict" not in claim.notes
+
+
+def test_a_field_with_no_declared_unit_is_not_reconciled():
+    claim = _quoted("rho", 8.7, "g/cm3", "density from XRR was 8.7 g/cm3")
+    assert claim.value == pytest.approx(8.7)
+    assert claim.units == "g/cm3"

@@ -672,3 +672,69 @@ def test_a_genuine_unit_error_still_lowers_unit_accuracy():
         CaseResult(case_id="bad", category="x", unit_accuracy=0.0),
     ]
     assert result.unit_accuracy == pytest.approx(0.5)
+
+
+# --- gold-key aliases (truth-set v2) --------------------------------------
+#
+# §10e proved two of three benchmark "misses" were not misses: the values were
+# extracted, passed every guard, and appeared in the brief under the registry keys
+# the extract-v4 prompt mandates. The gold field names were wrong.
+
+
+def test_a_gold_name_accepts_its_reviewed_registry_alias():
+    from cnms_fom.research.benchmark.evaluate import _keys_matching
+
+    assert "temperature_c" in _keys_matching("substrate_temperature")
+    assert "pressure_torr" in _keys_matching("oxygen_pressure")
+    #  The gold name itself must still match.
+    assert "substrate_temperature" in _keys_matching("substrate_temperature")
+
+
+def test_an_unaliased_key_matches_only_itself():
+    from cnms_fom.research.benchmark.evaluate import _keys_matching
+
+    assert _keys_matching("growth_per_cycle_ang") == ("growth_per_cycle_ang",)
+    assert _keys_matching("rho") == ("rho",)
+
+
+def test_aliasing_is_not_transitive_or_reversed():
+    """`temperature_c` must not start accepting `substrate_temperature`."""
+    from cnms_fom.research.benchmark.evaluate import _keys_matching
+
+    assert "substrate_temperature" not in _keys_matching("temperature_c")
+
+
+def test_a_wrong_dimension_key_still_fails_to_match():
+    """The alias table must not become a general key-loosening mechanism."""
+    from cnms_fom.research.benchmark.evaluate import _keys_matching
+
+    #  A pressure is not a temperature, however close the gold name sounds.
+    assert "pressure_torr" not in _keys_matching("substrate_temperature")
+    assert "temperature_c" not in _keys_matching("oxygen_pressure")
+    #  And nothing unrelated sneaks in.
+    for gold in ("substrate_temperature", "oxygen_pressure"):
+        assert "growth_per_cycle_ang" not in _keys_matching(gold)
+        assert "rho" not in _keys_matching(gold)
+
+
+def test_every_alias_target_is_a_real_registry_or_context_field():
+    """An alias pointing at a key nothing emits would be dead configuration."""
+    from cnms_fom.research.benchmark.evaluate import GOLD_KEY_ALIASES
+    from cnms_fom.research.contracts import (
+        CLAIM_CONTEXT_FIELDS,
+        FIELD_DIMENSION,
+        REQUIRED_CONTEXT,
+    )
+
+    known = set(CLAIM_CONTEXT_FIELDS) | set(FIELD_DIMENSION) | set(REQUIRED_CONTEXT)
+    for gold, aliases in GOLD_KEY_ALIASES.items():
+        for alias in aliases:
+            assert alias in known, f"{gold} aliases {alias}, which is not a known field"
+
+
+def test_the_case_set_version_is_recorded():
+    """v1 and v2 metrics are different experiments and must be labellable as such."""
+    from cnms_fom.research.benchmark.cases import CASE_SET_VERSION
+
+    assert CASE_SET_VERSION
+    assert "v2" in CASE_SET_VERSION

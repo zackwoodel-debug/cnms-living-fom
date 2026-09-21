@@ -567,6 +567,14 @@ def get_case_set(name: str) -> tuple[BenchmarkCase, ...]:
     return tuple(CASES_BY_ID[case_id] for case_id in CASE_SETS[name])
 
 
+#  Bumped whenever the *expectations* change, never for a retrieval or extraction
+#  change. v1 numbers and v2 numbers are different experiments and must not be compared:
+#  v2 corrects two gold field names that scored a correct extraction as a miss (§10e),
+#  so every extraction metric measured under v1 — including extraction_f1 = 0.397 — is
+#  void as a baseline rather than merely old.
+CASE_SET_VERSION = "v2-gold-keys"
+
+
 def seed_corpus(db, *, embed: bool = False) -> dict[str, int]:
     """Insert the fixture corpus. Returns ``{document key: document id}``.
 
