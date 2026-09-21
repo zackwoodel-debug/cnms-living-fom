@@ -857,6 +857,163 @@ that served v2 answers under a v3 prompt, which is worse than no cache.
 
 ---
 
+## 10d. First run on real PDFs through real Postgres
+
+Everything up to here was measured on the synthetic fixture corpus inside a throwaway
+SQLite database. This is the first pass through the path a user actually takes: ingest
+PDFs into Postgres, ask a question, read a brief. It found four bugs, three of which
+produced **fabricated scientific conclusions** — which is the failure mode this whole
+design exists to prevent, so they are worth stating plainly.
+
+Setup: `cnms-fom ingest data/pdfs --technique ald` into a migrated PostgreSQL 17.10
+database, two synthetic ALD papers, 7 chunks, all embedded with `nomic-embed-text`.
+
+What worked first time: ingestion, the 0007 `search_title` trigger (all 7 chunks in step
+with their document titles on the real insert path), embeddings, the dense leg,
+extraction units (`A/cycle`, from `extract-v4`), the missing-context guard, and the
+quote-verification guard, which caught the extractor inventing three quotes and marked
+those claims low-confidence instead of trusting them.
+
+### Bug 14: the lexical leg did not work on Postgres at all
+
+`NotImplementedError` with an **empty message**, surfacing as the warning "Corpus
+retrieval failed: ." — a report that something broke with no way to find out what.
+Cause: `.label()` on a `text()` clause, which SQLAlchemy 2.0 does not support. The
+lexical leg had only ever run on the SQLite term-overlap fallback path, so no test and
+no benchmark run had ever exercised it.
+
+Two things made it worse than a one-line bug:
+
+- **The documented fallback was unreachable.** The `try` wrapped only execution, while
+  the failure was at statement *construction*. The comment above it promised "the
+  caller below turns into a fallback to term overlap with a warning. That is the right
+  failure: slower, not wrong." It was not the right failure; it was a crash. Statement
+  construction now happens inside the `try`.
+- **A crashed query was reported as a finding about the literature.** With no passages,
+  the brief said "the evidence did not clear the policy's threshold" — §9.7's exact
+  failure mode in a path §9.7 did not cover. Retrieval failure now sets
+  `degraded_reason`, and `_reason()` guarantees a non-empty description.
+
+### Bug 15: the grader marked down partial answers to compound questions
+
+The question was "what growth per cycle **and** film density are reported, **and** do
+the sources agree?". The second paper's passage was graded **1** and dropped, with the
+reason "discusses growth per cycle for HfO2 ALD but does not address film density or
+agreement between sources."
+
+That reasoning is accurate and the grade is wrong. The rubric it was given says
+`2 = useful: contains part of what the question asks for`, and the passage contains a
+part. The grader was marking a passage down for the parts it did not cover, and no
+single passage can ever "address agreement between sources" — that comparison happens
+downstream, over the passages it keeps. `grade-v3` states this, enforcing the existing
+rubric rather than adding a rule.
+
+This also qualifies §10b's conclusion that the 7B grader is "past the cliff" where a 1B
+grader drops the discriminating passage. On a two-document real corpus it dropped it
+too, for a different reason.
+
+### Bug 16: a dose time was filed as a growth rate, and reported as a disagreement
+
+With the passage retrieved, extraction produced this:
+
+```
+growth_per_cycle_ang   0.2 s     <- a TDMAH dose time
+growth_per_cycle_ang   6 s       <- an N2 purge time
+growth_per_cycle_ang   0.1 s
+growth_per_cycle_ang   6 s
+```
+
+and the interpretation step then wrote: *"growth per cycle values vary widely (0.2 s,
+6.0 s, 0.1 s, 6.0 s), indicating a lack of consistency in the literature."* A fabricated
+disagreement, assembled out of purge timings, in a field whose name declares Ångström.
+
+The same bug class as `temperature_k` holding `"200 to 300 degC"` (§10b), which was
+guarded for *context* fields while a claim's own field/unit pairing had no guard at all.
+`FIELD_DIMENSION` plus `classify_unit` now reject a registry-keyed claim whose units
+have a recognised and incompatible dimension. It **raises**, so `extract.py` records the
+rejection as a visible problem on the brief rather than dropping it silently.
+
+Deliberately a dimension check rather than a list of acceptable spellings: sources write
+"A/cycle", "Å/cy" and worse, and rejecting a legitimate value over an unrecognised
+spelling would lose data. A unit is rejected only when its dimension is *recognised* and
+wrong; an unclassifiable unit is kept. Act on knowledge, abstain on ignorance.
+
+Writing the classifier produced its own instructive bug: `"s" in "angstrom"` is true, so
+substring matching classified every length as a time and would have rejected exactly the
+claims the guard protects. Bare unit markers now require whole-string equality after a
+leading magnitude is stripped; only compound markers (containing `/`) match as
+substrings. Twenty-five classifier cases are pinned in tests.
+
+### Bug 17: a category with a number invented a second disagreement
+
+After bug 16 was fixed the narrative still said *"a growth per cycle of **2.0** was
+reported for the hot-wall chamber"*. The source was an extraction of `material = 2` —
+a categorical context field with a numeric value — which the interpretation step read as
+a growth rate. `CATEGORICAL_CONTEXT_FIELDS` now rejects a numeric claim under a field
+that names a category. Carefully scoped: `thickness_nm`, `temperature_c`,
+`pressure_torr` and `frequency_hz` are legitimately both context and quantity, and are
+untouched.
+
+### The one change kept despite measuring worse, and why
+
+`grade-v3` costs benchmark score:
+
+```
+                      grade-v1   grade-v3
+overall_score           0.8257     0.8078
+page_precision          0.8704     0.7407
+extraction_f1           0.3972     0.3549
+doc_recall              1.0000     1.0000
+page_recall             1.0000     1.0000
+unit_accuracy           1.0000     1.0000
+context_completeness    1.0000     1.0000
+abstention_f1           0.8000     0.8000
+```
+
+Kept anyway, which needs justifying because the discipline everywhere else in this
+document is to revert what measures worse (`extract-v5`, `grade-v2`).
+
+The reason the two disagree: **`grade-v3` only changes behaviour on compound questions,
+and the benchmark has none.** All 12 cases ask for a single fact. So the benchmark sees
+the cost — a more permissive grader keeps more passages, which dilutes precision and
+feeds extraction more chances to produce a non-matching claim — and cannot see the
+benefit, because no case exercises it.
+
+The benefit is categorical rather than incremental. Without `grade-v3`, a compound
+question drops the only passage from the second source, so a cross-source disagreement
+cannot be *attempted*, let alone found. FOM_PROOF Sec. 2.1 and this project's own
+boundary require preserving each determination and reporting disagreement; a grader that
+discards one side makes that impossible rather than merely harder. And real questions are
+compound — the question that exposed this was the obvious one to ask of a two-paper
+corpus.
+
+It also pairs with the guards from bugs 16 and 17. "Keep more passages, then reject the
+claims that are dimensionally or categorically incoherent" is a defensible architecture.
+"Drop passages early and trust whatever survives" is the one that produced a fabricated
+literature disagreement out of purge timings.
+
+**The actual defect here is in the benchmark, not in either grader.** It needs a
+compound-question case. Not added in this round on purpose: every comparison table above
+is stated against the current 12-case baseline, and changing the case set would
+re-baseline all of them at once. It is the first thing to do next, and until it exists
+the 0.8078 above should be read as "measured against a case set that cannot evaluate this
+change".
+
+### Where it stands
+
+Both fabrications are gone. Every claim in the final brief traces to a real number in a
+real passage with units that can belong to its field, and the narrative makes only
+statements the evidence supports.
+
+**The real disagreement is still not found.** The second paper reports `0.98 angstrom
+per cycle` and extraction never picks it up, so the 1.42-vs-0.98 contradiction — the
+flagship capability — does not appear. That is extraction *recall*, consistent with
+`extraction_f1 = 0.397` on the benchmark, and it is now the top open problem rather than
+a suspicion. The guards added here make a wrong answer much harder; they do not make a
+missing one appear.
+
+---
+
 ## 11. Known limitations and deferred work
 
 **Measured, and significant:**
@@ -908,6 +1065,19 @@ that served v2 answers under a v3 prompt, which is worse than no cache.
 6. ~~**Benchmark with a real provider.**~~ **Done.** All four metrics unlocked, and
    they overturned the previous section's conclusion: retrieval was saturated and
    extraction was at 0.179. See §10c.
+
+**Now the top open problem:**
+
+6b. **Extraction recall, not retrieval, is the binding constraint.** `extraction_f1` is
+    0.397 after the prompt work in §10c, and on real PDFs (§10d) the extractor misses
+    `0.98 angstrom per cycle` outright, so the one genuine cross-source disagreement in
+    a two-paper corpus is never reported. Everything added in §10d makes a *wrong*
+    extraction much harder to produce; none of it makes a *missing* one appear. Three
+    benchmark claims are also still missed (`decomposition_onset_c`,
+    `substrate_temperature`, `oxygen_pressure`), all of them present in the retrieved
+    page. `extract-v5` tried to fix exactly this and measured worse, so the next attempt
+    should probably not be another prompt rule — a larger extraction model, or a second
+    pass over a page that a claim was expected on and not found, are the untried options.
 
 **Still not exercised:**
 

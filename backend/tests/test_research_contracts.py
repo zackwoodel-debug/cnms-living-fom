@@ -480,3 +480,95 @@ def test_the_conversion_makes_a_growth_claim_comparable():
     )
     assert claim.missing_context == []
     assert claim.is_comparable is True
+
+
+# --- a claim whose units contradict its own field --------------------------
+#
+# Found on a real corpus: asked a compound question, the extractor filed a
+# passage's ALD cycle timings ("0.2 s TDMAH dose, 6 s purge") as four
+# growth_per_cycle_ang claims, and the interpretation step then reported "growth
+# per cycle values vary widely (0.2 s, 6.0 s, 0.1 s, 6.0 s), indicating a lack of
+# consistency in the literature" — a fabricated finding built on dose times.
+
+
+def test_a_dose_time_cannot_be_a_growth_per_cycle():
+    with pytest.raises(ResearchContractError, match="growth per cycle"):
+        _claim(field_name="growth_per_cycle_ang", value=0.2, units="s")
+
+
+def test_the_real_growth_per_cycle_is_accepted():
+    """The guard must not reject the values it exists to protect."""
+    for units in ("A/cycle", "angstrom per cycle", "Å/cy", "nm/cycle"):
+        claim = _claim(field_name="growth_per_cycle_ang", value=1.42, units=units)
+        assert claim.units == units
+
+
+def test_a_dimensionless_property_rejects_a_physical_unit():
+    with pytest.raises(ResearchContractError, match="dimensionless"):
+        _claim(field_name="k", value=18.5, units="Torr")
+
+
+def test_a_dimensionless_property_accepts_its_conventional_unit():
+    """`"1"` is how this codebase writes dimensionless, and it must survive the guard.
+
+    `is_comparable` separately requires non-empty units, so `None` is not comparable
+    by a pre-existing rule that has nothing to do with dimensions.
+    """
+    claim = _claim(field_name="k", value=18.5, units="1",
+                   context={"temperature_k": 300.0, "frequency_hz": 1e4})
+    assert claim.is_comparable is True
+
+    from cnms_fom.research.contracts import classify_unit
+
+    #  "1" must not classify as any physical dimension, or every k would be rejected.
+    assert classify_unit("1") is None
+
+
+def test_an_unrecognised_unit_is_kept_not_rejected():
+    """Act on knowledge, abstain on ignorance: a spelling we do not know is not wrong."""
+    claim = _claim(field_name="rho", value=8.7, units="arb. units")
+    assert claim.units == "arb. units"
+
+
+def test_a_descriptive_field_name_is_unconstrained():
+    """Only registry keys carry a required dimension."""
+    claim = _claim(field_name="purge_duration_s", value=6.0, units="s")
+    assert claim.value == 6.0
+
+
+def test_short_unit_markers_do_not_match_as_substrings():
+    """`"s" in "angstrom"` is True, which classified a length as a time.
+
+    That bug would have rejected exactly the claims this guard protects.
+    """
+    from cnms_fom.research.contracts import classify_unit
+
+    assert classify_unit("angstrom") == "length"
+    assert classify_unit("angstroms") == "length"
+    assert classify_unit("s") == "time"
+    assert classify_unit("0.2 s") == "time"
+    assert classify_unit("widgets") is None
+
+
+def test_a_category_cannot_have_a_numeric_value():
+    """`material = 2` was read downstream as "a growth per cycle of 2.0"."""
+    with pytest.raises(ResearchContractError, match="names a category"):
+        _claim(field_name="material", value=2.0, units=None)
+
+    for name in ("technique", "precursor", "chamber", "substrate", "oxidant"):
+        with pytest.raises(ResearchContractError, match="names a category"):
+            _claim(field_name=name, value=1.0, units=None)
+
+
+def test_a_field_that_is_both_context_and_quantity_is_untouched():
+    """thickness_nm, temperature_c, pressure_torr and frequency_hz are legitimately both."""
+    assert _claim(field_name="thickness_nm", value=12.0, units="nm").value == 12.0
+    assert _claim(field_name="temperature_c", value=250.0, units="degC").value == 250.0
+    assert _claim(field_name="pressure_torr", value=1.5, units="Torr").value == 1.5
+
+
+def test_a_non_numeric_category_statement_is_still_allowed():
+    """A claim *about* the material with no number is not what this guard is for."""
+    claim = _claim(field_name="material", value=None, units=None,
+                   value_text="the film is monoclinic HfO2")
+    assert claim.value_text == "the film is monoclinic HfO2"

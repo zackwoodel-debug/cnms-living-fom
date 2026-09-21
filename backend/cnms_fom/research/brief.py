@@ -208,7 +208,19 @@ def generate_brief(
     cost = _cost_report(tool_calls)
     n_failed = cost["grading_failed"] + cost["extraction_failed"]
     degraded_reason = ""
-    if n_failed:
+    #  Retrieval failing is the same class of problem as a model call failing, and it
+    #  was not covered: a crashed query returned no passages, so the brief went on to
+    #  say "the evidence did not clear the policy's threshold" — a statement about the
+    #  literature, from a query that never ran. Found on the first run against real
+    #  Postgres, where the lexical leg raised at statement-construction time.
+    retrieval_error = (retrieval_trace.get("result") or {}).get("error")
+    if retrieval_error:
+        degraded_reason = (
+            f"Corpus retrieval failed ({retrieval_error}), so this brief saw no passages at "
+            "all. Nothing below is a statement about what the literature contains; re-run "
+            "once retrieval works before treating any gap as a real gap."
+        )
+    elif n_failed:
         parts = []
         if cost["grading_failed"]:
             parts.append(f"{cost['grading_failed']} grading call(s)")
@@ -433,6 +445,17 @@ def _read_records(
     return warnings, trace
 
 
+def _reason(exc: BaseException) -> str:
+    """A non-empty description of a failure.
+
+    ``NotImplementedError("")`` is a real thing SQLAlchemy raises, and formatting it
+    with ``{exc}`` produced the warning "Corpus retrieval failed: ." — a report that
+    something went wrong and no way to find out what.
+    """
+    text = str(exc).strip()
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
 def _retrieve(
     db, question: str, *, policy: ResearchPolicy, provider, cache_db=None
 ) -> tuple[list[EvidenceItem], dict, list[str]]:
@@ -469,18 +492,18 @@ def _retrieve(
         #  records, and saying retrieval did not run is very different from saying
         #  the corpus is empty.
         warnings.append(
-            f"Corpus retrieval did not run: {exc}. This brief covers only the cards and records, "
-            "and its data gaps must not be read as gaps in the literature."
+            f"Corpus retrieval did not run: {_reason(exc)}. This brief covers only the cards and "
+            "records, and its data gaps must not be read as gaps in the literature."
         )
         return [], {"tool": "retrieve", "arguments": {"query": question},
-                    "result": {"error": str(exc)}}, warnings
+                    "result": {"error": _reason(exc)}}, warnings
     except Exception as exc:  # noqa: BLE001
         warnings.append(
-            f"Corpus retrieval failed: {exc}. As above, the gaps below are not evidence that the "
-            "literature is silent."
+            f"Corpus retrieval failed: {_reason(exc)}. As above, the gaps below are not evidence "
+            "that the literature is silent."
         )
         return [], {"tool": "retrieve", "arguments": {"query": question},
-                    "result": {"error": str(exc)}}, warnings
+                    "result": {"error": _reason(exc)}}, warnings
 
     useful = outcome.useful if policy.grade else outcome.hits
     useful = _reweight_structured(useful, policy)

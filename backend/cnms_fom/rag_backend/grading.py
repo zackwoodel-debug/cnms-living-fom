@@ -66,7 +66,7 @@ MIN_USEFUL_PASSAGES = 1
 
 #  Bumped whenever GRADER_PROMPT changes. It is part of the cache key, so an
 #  edited prompt must not be served answers graded under the old one.
-GRADER_PROMPT_VERSION = "grade-v1"
+GRADER_PROMPT_VERSION = "grade-v3"
 
 GRADER_PROMPT = """\
 You grade whether a retrieved passage answers a question about thin-film \
@@ -85,6 +85,12 @@ Rules:
 about it is a 1, not a 2. Shared vocabulary is not relevance.
 - A numerical parameter stripped of its context is a 2 at most, never a 3. A \
 growth temperature with no stated chamber or substrate is not an answer.
+- A question may ask several things at once ("what growth per cycle and what \
+density, and do the sources agree?"). Grade each passage on the part it does answer. \
+A passage carrying one of the three asked-for facts is a 2 — that is what "contains \
+part of what the question asks for" means — and must not be marked down to a 1 for \
+being silent on the others. No single passage answers a comparison between sources; \
+comparing them happens later, and it can only happen over passages you kept.
 - Judge only the passage in front of you. Do not use anything you know about the \
 subject to fill in what the passage does not say.
 

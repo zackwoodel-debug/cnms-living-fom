@@ -151,7 +151,7 @@ def lexical_search(
 def _postgres_fulltext(
     session, query: str, *, k: int, techniques: list[SynthesisTechnique] | None
 ) -> list[ChunkHit]:
-    from sqlalchemy import bindparam, text
+    from sqlalchemy import func, literal_column
 
     from cnms_fom.db.models import Document, DocumentChunk
 
@@ -173,24 +173,30 @@ def _postgres_fulltext(
         "to_tsvector('english', coalesce(document_chunks.search_title, '') "
         "|| ' ' || document_chunks.text)"
     )
-    vector_expr = text(searchable)
-    query_expr = text("websearch_to_tsquery('english', :lexical_query)").bindparams(
-        bindparam("lexical_query", query)
-    )
-    rank_expr = text(
-        f"ts_rank_cd({searchable}, websearch_to_tsquery('english', :lexical_query))"
-    ).bindparams(bindparam("lexical_query", query))
 
-    statement = (
-        session.query(DocumentChunk, Document, rank_expr.label("rank"))
-        .join(Document, DocumentChunk.document_id == Document.id)
-        .filter(vector_expr.op("@@")(query_expr))
-    )
-    if techniques:
-        statement = statement.filter(Document.technique.in_(list(techniques)))
-
+    #  Building the statement is inside the try with executing it. It was outside, and
+    #  that was the whole reason a first run against real Postgres crashed instead of
+    #  degrading: `.label()` on a `text()` clause raises NotImplementedError in
+    #  SQLAlchemy 2.0, at construction time, so the fallback this comment promises was
+    #  unreachable. A fallback that only covers execution is not a fallback.
     try:
-        rows = statement.order_by(text("rank DESC")).limit(k).all()
+        #  literal_column, not text: it is a ColumnElement, so `.op("@@")` and
+        #  `.label()` both work. The SQL string stays byte-identical to migration
+        #  0007's index expression, which is not cosmetic — one missing space drops the
+        #  plan from a 5.7 ms index scan to a 99 ms sequential scan.
+        tsvector = literal_column(searchable)
+        tsquery = func.websearch_to_tsquery("english", query)
+        rank_expr = func.ts_rank_cd(tsvector, tsquery)
+
+        statement = (
+            session.query(DocumentChunk, Document, rank_expr.label("rank"))
+            .join(Document, DocumentChunk.document_id == Document.id)
+            .filter(tsvector.op("@@")(tsquery))
+        )
+        if techniques:
+            statement = statement.filter(Document.technique.in_(list(techniques)))
+
+        rows = statement.order_by(rank_expr.desc()).limit(k).all()
     except Exception as exc:  # noqa: BLE001 - a missing index or FTS config, not a bug in the caller
         logger.warning("Postgres full-text search failed (%s); falling back to term overlap.", exc)
         return _python_term_overlap(session, query, k=k, techniques=techniques)

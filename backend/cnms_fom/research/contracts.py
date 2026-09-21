@@ -183,6 +183,98 @@ UNIT_BEARING_CONTEXT: dict[str, str] = {
     "area_cm2": "square centimetres",
 }
 
+#  The physical dimension each registry key must have, and how a unit string is
+#  classified into one. This exists because of a real fabrication: asked a compound
+#  question, the extractor filed a passage's ALD cycle timings — "0.2 s TDMAH dose,
+#  6 s purge" — as four ``growth_per_cycle_ang`` claims, and the narrative then
+#  reported "growth per cycle values vary widely (0.2 s, 6.0 s, 0.1 s, 6.0 s),
+#  indicating a lack of consistency in the literature". A dose time is not a growth
+#  rate, and a field named ``_ang`` holding seconds is not a value that should reach
+#  a reader at all.
+#
+#  Deliberately a dimension check rather than a list of acceptable spellings: real
+#  sources write "A/cycle", "Å/cy", "Ang per cycle" and worse, and rejecting a
+#  legitimate value for an unrecognised spelling would lose data. So a unit is only
+#  rejected when its dimension is *recognised* and wrong. An unclassifiable unit is
+#  kept — act on knowledge, abstain on ignorance.
+_DIMENSION_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    #  Order matters: the compound forms must be tested before their parts, or
+    #  "angstrom per cycle" classifies as a bare length.
+    ("growth_per_cycle", ("/cycle", "percycle", "/cy", "/pulse")),
+    ("rate", ("/s", "/sec", "/min", "/hour", "/h")),
+    ("density", ("g/cm3", "g/cc", "kg/m3", "gcm-3")),
+    ("sld", ("a-2", "a^-2", "1/a2", "a**-2")),
+    ("energy", ("ev", "mev", "kev", "joule", "kj/mol")),
+    ("field", ("mv/cm", "kv/cm", "v/nm", "kv/mm", "v/m")),
+    ("thermal_conductivity", ("w/mk", "w/m-k", "w/(mk)", "w/cmk")),
+    ("time", ("s", "sec", "secs", "second", "seconds", "ms", "min", "minute",
+              "minutes", "h", "hr", "hour", "hours", "cycle", "cycles")),
+    ("temperature", ("degc", "c", "k", "degk", "celsius", "kelvin", "degf")),
+    ("pressure", ("torr", "mtorr", "pa", "kpa", "mbar", "bar", "atm", "psi")),
+    ("length", ("a", "angstrom", "angstroms", "nm", "um", "micron", "mm", "cm", "m")),
+)
+
+#  The dimension a registry key's units must have. A key absent here is unconstrained,
+#  which is the right default for a descriptive name the extractor invented.
+FIELD_DIMENSION: dict[str, str] = {
+    "growth_per_cycle_ang": "growth_per_cycle",
+    "growth_rate_nm_min": "rate",
+    "rho": "density",
+    "sld_xray": "sld",
+    "sld_neutron": "sld",
+    "Eg": "energy",
+    "dEc": "energy",
+    "Ebd": "field",
+    "kappa_th": "thermal_conductivity",
+    "thickness_nm": "length",
+    "roughness_ang": "length",
+    "temperature_c": "temperature",
+}
+
+#  Context fields that name a category, not a quantity. A *numeric* claim filed under
+#  one of these is the extractor confusing the field slot with the context slot, and it
+#  is not harmless: an extraction of ``material = 2`` was read by the interpretation
+#  step as "a growth per cycle of 2.0 was reported for the hot-wall chamber", inventing
+#  a disagreement between sources out of a category label.
+#
+#  Only the text-valued context fields are listed. ``thickness_nm``, ``temperature_c``,
+#  ``pressure_torr`` and ``frequency_hz`` are legitimately both context and claim, so
+#  they must not appear here.
+CATEGORICAL_CONTEXT_FIELDS: frozenset[str] = frozenset({
+    "material", "polymorph", "specimen_form", "technique", "substrate", "electrode",
+    "interface", "precursor", "oxidant", "chamber", "anneal", "failure_criterion",
+    "method", "software", "xc_functional",
+})
+
+#  Dimensionless by definition: a number with any unit attached is suspect.
+DIMENSIONLESS_FIELDS: frozenset[str] = frozenset(
+    {"k", "eps_inf", "eps_ionic", "tan_delta"}
+)
+
+
+def classify_unit(units: str | None) -> str | None:
+    """The physical dimension a unit string denotes, or None if unrecognised.
+
+    A compound marker (one containing "/") matches as a substring, because the unit
+    may carry a prefix: "1.42 A/cycle" is still a growth per cycle. A bare marker must
+    match the *whole* remaining unit, because substring matching on short tokens is
+    indefensible — "s" for seconds appears inside "angstrom", which classified a length
+    as a time and would have rejected the very claims this guard exists to protect.
+    """
+    text = (units or "").strip().lower().replace(" per ", "/").replace("·", "")
+    text = "".join(text.split())
+    #  Drop a leading magnitude so "0.2s" and "6s" reduce to the unit itself.
+    text = text.lstrip("0123456789.,+-±")
+    if not text:
+        return None
+    for dimension, markers in _DIMENSION_PATTERNS:
+        for marker in markers:
+            compound = "/" in marker
+            if (marker in text) if compound else (text == marker):
+                return dimension
+    return None
+
+
 #  Which context a claim needs before it is worth comparing with anything, per
 #  property key. Absence is reported, never filled in: Sec. 16 makes context part
 #  of what a value *is*, so a permittivity with no frequency is not a permittivity
@@ -264,8 +356,42 @@ class ExtractedClaim:
             self.notes = (
                 f"{self.notes} [unrecognised context keys: {sorted(unknown)}]".strip()
             )
+        self._reject_dimensionally_impossible_units()
         self._quarantine_mislabelled_units()
         self._derive_kelvin_from_celsius()
+
+    def _reject_dimensionally_impossible_units(self) -> None:
+        """Refuse a registry-keyed claim whose units cannot belong to that quantity.
+
+        Raises rather than flagging: ``extract.py`` records the rejection as a problem
+        on the brief, so the claim is dropped *and* the drop is visible. A mislabelled
+        claim is worse than a missing one here, because downstream it is
+        indistinguishable from a real one and the interpretation step will reason over
+        it — which is exactly what happened, reporting four purge and dose times as a
+        literature disagreement about growth per cycle.
+        """
+        if self.field_name in CATEGORICAL_CONTEXT_FIELDS and self.value is not None:
+            raise ResearchContractError(
+                f"{self.field_name} names a category, not a quantity, so it cannot have the "
+                f"numeric value {self.value}. If the passage states it, it belongs in this "
+                f"claim's context rather than as a claim of its own."
+            )
+        expected = FIELD_DIMENSION.get(self.field_name)
+        actual = classify_unit(self.units)
+        if expected and actual and actual != expected:
+            raise ResearchContractError(
+                f"{self.field_name} must be a {expected.replace('_', ' ')}, but its units "
+                f"{self.units!r} are a {actual.replace('_', ' ')}. A quantity filed under the "
+                f"wrong key cannot be compared with anything and would be read as real."
+            )
+        if self.field_name in DIMENSIONLESS_FIELDS and actual in {
+            "time", "temperature", "pressure", "length", "density", "rate",
+            "growth_per_cycle",
+        }:
+            raise ResearchContractError(
+                f"{self.field_name} is dimensionless, but its units {self.units!r} are a "
+                f"{actual.replace('_', ' ')}."
+            )
 
     def _derive_kelvin_from_celsius(self) -> None:
         """Fill ``temperature_k`` from ``temperature_c``, in code rather than in a prompt.
