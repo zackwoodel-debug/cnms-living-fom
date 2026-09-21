@@ -230,6 +230,8 @@ backend/cnms_fom/
   routers/            /materials /fom /rag /cards /research /modalfit /bo /pilot
 migrations/           Alembic revisions
 frontend/             React + Vite + TypeScript
+quark/                Quark, the chat interface — TanStack Start + Vite + Bun,
+                      streaming from local Ollama. See quark/README.md
 docs/                 COSCIENTIST.md ← start here · FOM_PROTOCOL.md · DB_PROTOCOL.md
                       PILOT_WORKFLOW.md · RESEARCH_ASSISTANT.md · MODALFIT_INTEGRATION.md
                       AUTORESEARCH_AUDIT.md

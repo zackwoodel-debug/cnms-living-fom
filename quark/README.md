@@ -6,9 +6,8 @@ never invents measurements or citations. The interface is built as a calm
 research workspace — a thread rail, a focused conversation, and a composer
 wired to a **local Ollama model**.
 
-This repository is the UI. The science lives in
-[`zackwoodel-debug/cnms-living-fom`](https://github.com/zackwoodel-debug/cnms-living-fom)
-(backend, database, migrations, docs).
+This folder is the UI. The science lives alongside it in the same repository —
+`backend/` (FOM engine, retrieval, the research loop), `migrations/`, and `docs/`.
 
 ![Quark research workspace](docs/quark-screenshot.png)
 
