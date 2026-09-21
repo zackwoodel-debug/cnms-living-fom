@@ -70,13 +70,32 @@ class ChunkHit:
         }
 
 
-def _pgvector_available() -> bool:
+def _pgvector_available(session=None) -> bool:
+    """Whether the pgvector query path can actually run.
+
+    ``session`` matters. The setting and the package say pgvector is *configured*;
+    only the session says which database is in front of us, and ``cosine_distance``
+    compiles to the Postgres-only ``<=>`` operator. Without the dialect check a
+    perfectly reasonable deployment — ``PGVECTOR_ENABLED=true`` for the production
+    Postgres — emitted ``<=>`` at any SQLite session in the same process and failed
+    with "near '>': syntax error". That reaches the assistant as
+    ``search_corpus failed``, so a configuration flag became a statement about the
+    corpus.
+
+    Called without a session it answers the old question, "is pgvector configured",
+    which is what the capability report wants.
+    """
     if not get_settings().pgvector_enabled:
         return False
     try:
         import pgvector.sqlalchemy  # noqa: F401
     except ImportError:
         return False
+    if session is not None:
+        try:
+            return session.get_bind().dialect.name == "postgresql"
+        except Exception:  # noqa: BLE001 - an unbound session is not Postgres
+            return False
     return True
 
 
@@ -102,7 +121,7 @@ def search_chunks(
     if techniques:
         query = query.filter(Document.technique.in_(list(techniques)))
 
-    if _pgvector_available():
+    if _pgvector_available(session):
         #  pgvector's cosine_distance is 1 - cosine_similarity.
         distance = DocumentChunk.embedding.cosine_distance(query_vector)
         rows = query.add_columns(distance.label("distance")).order_by(distance).limit(k).all()

@@ -383,3 +383,41 @@ def test_the_prompts_survive_formatting_with_retrieved_text(db):
     assert "{context}" not in rendered
     assert USER_PROMPT.format(question="what {is} this?") .endswith("[n] citations.")
 
+
+
+# --- pgvector is a property of the database, not of the config -------------
+#
+# Caught by CI's Postgres job, which installs the `vector` extra and sets
+# PGVECTOR_ENABLED=true while this test file still uses SQLite. `cosine_distance`
+# compiles to the Postgres-only `<=>` operator, so a reasonable deployment setting
+# emitted it at SQLite and failed with "near '>': syntax error" — surfacing to the
+# assistant as `search_corpus failed`, a config flag masquerading as a statement
+# about the corpus.
+
+
+def test_pgvector_is_not_used_against_a_sqlite_session(db, monkeypatch):
+    from cnms_fom.rag_backend import vectorstore
+
+    monkeypatch.setattr(
+        vectorstore, "get_settings",
+        lambda: type("S", (), {"pgvector_enabled": True, "embedding_dim": 768})(),
+    )
+    pytest.importorskip("pgvector.sqlalchemy")
+
+    #  Configured, yes; usable against this session, no.
+    assert vectorstore._pgvector_available() is True
+    assert vectorstore._pgvector_available(db) is False
+
+
+def test_a_vector_search_on_sqlite_returns_results_rather_than_raising(
+    db, monkeypatch
+):
+    from cnms_fom.rag_backend import vectorstore
+
+    monkeypatch.setattr(
+        vectorstore, "get_settings",
+        lambda: type("S", (), {"pgvector_enabled": True, "embedding_dim": 768})(),
+    )
+    #  Must not raise: the portable path handles it.
+    hits = vectorstore.search_chunks(db, [0.0] * 768, k=3)
+    assert isinstance(hits, list)
