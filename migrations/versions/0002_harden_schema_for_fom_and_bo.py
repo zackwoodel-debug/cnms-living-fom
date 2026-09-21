@@ -604,7 +604,13 @@ def downgrade() -> None:
                type_=sa.VARCHAR(length=11),
                existing_nullable=False)
     with op.batch_alter_table('property_values', schema=None) as batch_op:
-        batch_op.drop_constraint('uq_property_value_context', type_='unique')
+        #  `uq_property_value_context` is dropped by _drop_context_unique_constraint()
+        #  above, which handles the dialect difference. Dropping it again here failed on
+        #  Postgres with "constraint ... does not exist" and was invisible on SQLite,
+        #  where batch mode rebuilds the table from reflection and the second drop is a
+        #  no-op. The round trip had therefore only ever been exercised on SQLite —
+        #  the same shape as the other bugs in this codebase that survived because one
+        #  backend never ran the code.
         batch_op.drop_index(batch_op.f('ix_property_values_context_digest'))
         batch_op.drop_index('ix_property_material_key')
         batch_op.drop_index('ix_property_key_tier')

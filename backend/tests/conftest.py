@@ -60,6 +60,38 @@ def no_dense_retrieval(monkeypatch):
     return _unavailable
 
 
+@pytest.fixture
+def stub_dense_retrieval(monkeypatch):
+    """A deterministic embedder, so the dense leg *runs* without a model server.
+
+    The complement of ``no_dense_retrieval``. Some tests need a search that
+    completes and legitimately finds nothing — an empty result rather than a
+    failure — and without the ``rag`` extra there is no way to get one, because
+    ``hybrid_search`` correctly raises when no retriever could run at all.
+
+    That gap is not hypothetical: a test asserting an empty-but-successful search
+    passed locally, where the extra is installed, and failed in CI, where it is
+    not. Depending on an optional dependency to reach a required behaviour is how
+    a path ends up untested on the machine that matters.
+    """
+    from cnms_fom.config import get_settings
+
+    width = get_settings().embedding_dim
+
+    def _embed(text: str, model: str | None = None) -> list[float]:  # noqa: ARG001
+        #  Content-derived rather than constant, so two different queries are not
+        #  silently identical, and unit-length so cosine similarity is well defined.
+        seed = sum(ord(ch) for ch in text) or 1
+        vector = [((seed * (i + 1)) % 97) / 97.0 for i in range(width)]
+        norm = sum(v * v for v in vector) ** 0.5 or 1.0
+        return [v / norm for v in vector]
+
+    monkeypatch.setattr(
+        "cnms_fom.rag_backend.embeddings.embed_query", _embed, raising=False
+    )
+    return _embed
+
+
 @pytest.fixture(autouse=True)
 def benchmark_cache_is_never_the_real_one(tmp_path, monkeypatch):
     """Redirect the benchmark's model-call cache to a per-test temporary file.

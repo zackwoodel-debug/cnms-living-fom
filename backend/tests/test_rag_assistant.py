@@ -739,9 +739,15 @@ def test_an_answer_stands_when_any_tool_returned_content(db):
     assert answer.suppressed_answer is None
 
 
-def test_content_detection_ignores_a_tools_own_echo_and_notes(db):
+def test_content_detection_ignores_a_tools_own_echo_and_notes(db, stub_dense_retrieval):
     """Every tool echoes its arguments and a note even when it found nothing, so a
-    truthiness test on the payload would call an empty search 'content'."""
+    truthiness test on the payload would call an empty search 'content'.
+
+    ``stub_dense_retrieval`` because the case needs a search that *completes* and
+    finds nothing. Without it the test passed locally and failed in CI: with the
+    ``rag`` extra absent the dense leg cannot run, ``hybrid_search`` correctly
+    raises rather than reporting a data gap it did not establish, and the payload
+    is an error instead of an empty result."""
     from cnms_fom.rag_backend.agent import _step_has_content
 
     empty_search = run_tool(db, "search_corpus", {"query": "gallium arsenide germanium"})

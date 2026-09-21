@@ -382,3 +382,4 @@ def test_the_prompts_survive_formatting_with_retrieved_text(db):
     assert "Nevot-Croce" in rendered
     assert "{context}" not in rendered
     assert USER_PROMPT.format(question="what {is} this?") .endswith("[n] citations.")
+

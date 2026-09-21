@@ -82,6 +82,13 @@ jobs:
     env:
       DATABASE_URL: postgresql+psycopg2://cnms:cnms@localhost:5432/cnms_fom_test
       PGVECTOR_ENABLED: "true"
+      # Turns on the Postgres-only tests, which skip loudly without it. They were
+      # skipping in the one job that has a Postgres service, so the backend-specific
+      # paths went unexercised — which is how both bugs this workflow just caught
+      # survived: a lexical query that had only ever run on SQLite's fallback, and a
+      # 0002 downgrade that dropped the same constraint twice, harmless on SQLite and
+      # fatal on Postgres. Each test creates and drops its own throwaway database.
+      CNMS_TEST_POSTGRES_URL: postgresql+psycopg2://cnms:cnms@localhost:5432/cnms_fom_test
 
     steps:
       - uses: actions/checkout@v4
