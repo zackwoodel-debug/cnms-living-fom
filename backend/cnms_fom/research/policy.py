@@ -57,6 +57,10 @@ class ResearchPolicy:
     #  when it returns nothing, OR the query's terms and re-rank by term coverage.
     #  Off by default because it changes retrieval, and the benchmark decides.
     lexical_relaxed: bool = False
+    #  Grade a compound question's conjuncts separately and keep the best grade, but only
+    #  for a passage that would otherwise be dropped. Monotone by construction: a grade
+    #  can go up, never down. Off by default; the benchmark decides.
+    grade_per_conjunct: bool = False
     #  Reciprocal-rank-fusion damping. 60 is the TREC value; exposed because it is
     #  a knob, not because it is expected to move.
     rrf_k: int = 60
@@ -217,6 +221,13 @@ CANDIDATES: dict[str, ResearchPolicy] = {
         name="lexical_only_relaxed", use_dense=False, lexical_relaxed=True,
         notes="lexical_only with two-stage lexical retrieval, to measure the lexical "
         "leg on its own rather than behind a saturated dense leg.",
+    ),
+    "per_conjunct": BASELINE.evolve(
+        name="per_conjunct", grade_per_conjunct=True,
+        notes="Grades each conjunct of a compound question separately and keeps the best "
+        "grade, escalating only for a passage that would otherwise fall below "
+        "MIN_USEFUL_GRADE. Targets the §10e loss: the 0.98 A/cycle passage scored 2 on a "
+        "single-clause question and 1 on the compound one.",
     ),
     "lexical_relaxed": BASELINE.evolve(
         name="lexical_relaxed", lexical_relaxed=True,

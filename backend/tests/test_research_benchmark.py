@@ -8,6 +8,8 @@ fabrication.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from cnms_fom.research.benchmark import (
@@ -27,7 +29,12 @@ from cnms_fom.research.benchmark import (
 from cnms_fom.research.benchmark.cases import CASES_BY_ID, ExpectedClaim, page_text
 from cnms_fom.research.benchmark.evaluate import CaseResult
 from cnms_fom.research.benchmark.runner import RunOutcome, git_commit
-from cnms_fom.research.contracts import EvidenceItem, ExtractedClaim, ResearchBrief
+from cnms_fom.research.contracts import (
+    ClaimTier,
+    EvidenceItem,
+    ExtractedClaim,
+    ResearchBrief,
+)
 from cnms_fom.research.policy import BASELINE, get_policy
 
 # --- the fixture corpus ---------------------------------------------------
@@ -349,8 +356,13 @@ def test_the_combined_policy_beats_both_of_its_parts():
     assert scores["focused"].overall_score > scores["narrow_pool"].overall_score
     assert scores["focused"].overall_score > scores["table_biased"].overall_score
     #  The check that matters: a tighter window must not win by failing the
-    #  multi-source case.
-    assert scores["focused"].page_recall == 1.0
+    #  multi-source case. page_recall is no longer 1.0 for *any* policy — truth-set v3
+    #  added a compound question whose two conjuncts sit on two different pages and the
+    #  second is not surfaced — so the claim is now made as a comparison rather than an
+    #  absolute. Recorded rather than asserted away: that miss is the discriminating
+    #  signal the suite previously lacked.
+    assert scores["focused"].doc_recall == 1.0
+    assert scores["focused"].page_recall >= scores["baseline"].page_recall
     assert (
         scores["focused"].by_category()["cross_paper_disagreement"]
         >= scores["baseline"].by_category()["cross_paper_disagreement"]
@@ -737,4 +749,156 @@ def test_the_case_set_version_is_recorded():
     from cnms_fom.research.benchmark.cases import CASE_SET_VERSION
 
     assert CASE_SET_VERSION
-    assert "v2" in CASE_SET_VERSION
+    #  Deliberately not pinned to a number: the point is that a version exists at all, so
+    #  two expectation sets are never compared as one experiment. Pinning "v2" made the
+    #  bump to v3 fail a test that was asserting nothing useful.
+    assert re.match(r"^v\d+-[a-z-]+$", CASE_SET_VERSION), CASE_SET_VERSION
+
+
+# --- truth-set v3: compound questions and forbidden claims -----------------
+#
+# The suite had no compound question, which is why three separate changes
+# (grade-v3, lexical_relaxed, and next per-conjunct grading) could not be judged on
+# it: it saw their cost and none of their benefit. It also had no way to assert that
+# a fabrication stays absent, so the §10d failures could not become regressions.
+
+
+def test_the_suite_has_compound_questions():
+    from cnms_fom.research.benchmark.cases import get_case_set
+
+    compound = get_case_set("compound")
+    assert len(compound) >= 2
+    for case in compound:
+        #  A compound question asks for more than one thing; "and" is the cheap proxy
+        #  and every one of these was written to have at least two conjuncts.
+        assert " and " in case.question, case.case_id
+
+
+def test_dev_and_holdout_partition_the_suite():
+    """Tuning on dev only means dev and holdout must not share a case."""
+    from cnms_fom.research.benchmark.cases import CASE_SETS, CASES
+
+    dev, holdout = set(CASE_SETS["dev"]), set(CASE_SETS["holdout"])
+    assert not dev & holdout, f"overlap: {sorted(dev & holdout)}"
+    assert dev and holdout
+    #  Nothing orphaned: a case in neither split is a case nobody looks at.
+    assert {c.case_id for c in CASES} == dev | holdout
+
+
+def test_both_splits_contain_a_compound_case():
+    """Otherwise a compound-question change could be tuned without being validated."""
+    from cnms_fom.research.benchmark.cases import CASE_SETS, CASES_BY_ID
+
+    for split in ("dev", "holdout"):
+        categories = {CASES_BY_ID[cid].category for cid in CASE_SETS[split]}
+        assert "compound_question" in categories, split
+
+
+def test_a_forbidden_claim_zeroes_the_case():
+    """A reproduced fabrication is not a partial success."""
+    good = CaseResult(case_id="a", category="x", doc_recall=1.0, page_recall=1.0)
+    bad = CaseResult(case_id="b", category="x", doc_recall=1.0, page_recall=1.0,
+                     forbidden_present=1)
+    assert good.score > 0
+    assert bad.score == 0.0
+
+
+def test_a_dose_time_as_growth_per_cycle_is_caught_as_forbidden():
+    """The §10d regression, now assertable: purge times filed as growth per cycle."""
+    from cnms_fom.research.benchmark.cases import CASES_BY_ID
+    from cnms_fom.research.benchmark.evaluate import evaluate_case
+
+    case = CASES_BY_ID["dimensional_negative_cycle_timing"]
+
+    #  This claim cannot be *constructed* any more: the dimensional guard rejects seconds
+    #  under an Angstrom-declaring field at __post_init__. That is the first line of
+    #  defence, and it is tested in test_research_contracts.py. The forbidden rule is the
+    #  second, and exists for a future change that weakens the first — so the shape is
+    #  assembled legally and then mutated, which is exactly what such a regression would
+    #  look like from the benchmark's side.
+    claim = ExtractedClaim(
+        field_name="purge_duration_s", value=6.0, units="s", tier=ClaimTier.REPORTED,
+        evidence=[EvidenceItem(
+            document_id=1,
+            document_title="SYNTHETIC ALD of HfO2 on Si(100) from TDMAH and water "
+                           "(hot-wall)",
+            page=1, quote="a 6 s N2 purge")],
+    )
+    claim.field_name = "growth_per_cycle_ang"
+
+    brief = ResearchBrief(research_question=case.question, claims=[claim])
+    result = evaluate_case(case, brief, extraction_available=True)
+    assert result.forbidden_present >= 1
+    assert result.score == 0.0
+    assert any("FORBIDDEN" in d for d in result.diagnostics)
+
+
+def test_a_manufactured_disagreement_is_caught_as_forbidden():
+    """The mirror of cross_paper_disagreement: only one source states a density."""
+    from cnms_fom.research.benchmark.cases import CASES_BY_ID
+    from cnms_fom.research.benchmark.evaluate import evaluate_case
+    from cnms_fom.research.contracts import Contradiction
+
+    case = CASES_BY_ID["negative_disagreement_density"]
+    ev = [EvidenceItem(document_id=1, document_title="t", page=3, quote="9.1 g/cm3")]
+    left = ExtractedClaim(field_name="rho", value=9.1, units="g/cm3", evidence=ev,
+                          tier=ClaimTier.MEASURED)
+    right = ExtractedClaim(field_name="rho", value=8.7, units="g/cm3", evidence=ev,
+                           tier=ClaimTier.MEASURED)
+    brief = ResearchBrief(
+        research_question=case.question, claims=[left, right],
+        contradictions=[Contradiction(field_name="rho", left=left, right=right,
+                                      basis="test")],
+    )
+    result = evaluate_case(case, brief, extraction_available=True)
+    assert result.forbidden_present >= 1
+    assert result.score == 0.0
+    assert any("manufactured disagreement" in d for d in result.diagnostics)
+
+
+def test_a_clean_brief_trips_no_forbidden_rule():
+    """The guard must not fire on a correct answer."""
+    from cnms_fom.research.benchmark.cases import CASES_BY_ID
+    from cnms_fom.research.benchmark.evaluate import evaluate_case
+
+    case = CASES_BY_ID["dimensional_negative_cycle_timing"]
+    brief = ResearchBrief(
+        research_question=case.question,
+        claims=[
+            ExtractedClaim(
+                field_name="purge_duration_s", value=6.0, units="s",
+                tier=ClaimTier.REPORTED,
+                evidence=[EvidenceItem(document_id=1, document_title="t", page=1,
+                                       quote="a 6 s N2 purge")],
+            )
+        ],
+    )
+    result = evaluate_case(case, brief, extraction_available=True)
+    assert result.forbidden_present == 0
+
+
+def test_the_unit_variant_gold_matches_a_canonical_claim():
+    """Gold in nm/cycle against a claim in A/cycle: the same number, both ways."""
+    from cnms_fom.research.benchmark.cases import CASES_BY_ID
+    from cnms_fom.research.benchmark.evaluate import evaluate_case
+
+    case = CASES_BY_ID["unit_variant_gpc"]
+    brief = ResearchBrief(
+        research_question=case.question,
+        claims=[
+            ExtractedClaim(
+                field_name="growth_per_cycle_ang", value=0.98, units="A/cycle",
+                tier=ClaimTier.MEASURED,
+                evidence=[EvidenceItem(
+                    document_id=1,
+                    document_title="SYNTHETIC ALD of HfO2 on Si(100) from TDMAH and "
+                                   "water (hot-wall)",
+                    page=2, quote="0.98 angstrom per cycle")],
+            )
+        ],
+    )
+    result = evaluate_case(case, brief, extraction_available=True)
+    assert result.extraction_recall == pytest.approx(1.0), (
+        "a normalisation mismatch must not read as a recall failure: "
+        f"{result.diagnostics}"
+    )

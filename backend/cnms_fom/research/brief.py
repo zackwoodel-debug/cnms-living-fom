@@ -235,9 +235,15 @@ def generate_brief(
         )
         warnings.append(degraded_reason)
 
-    abstained = _should_abstain(
-        passages, claims, policy, extraction_ran=bool(passages and provider is not None)
+    #  A provider that cannot extract must not make the brief say the corpus is empty.
+    #  `extracts = False` is how the benchmark's StubExtractor declares that; anything
+    #  without the attribute is assumed to extract, so a real provider is unaffected.
+    extraction_ran = bool(
+        passages
+        and provider is not None
+        and getattr(extraction_provider(provider, policy), "extracts", True)
     )
+    abstained = _should_abstain(passages, claims, policy, extraction_ran=extraction_ran)
     if abstained and not degraded_reason:
         warnings.append(
             "This brief abstains: the evidence did not clear the policy's threshold, so no "
@@ -486,6 +492,7 @@ def _retrieve(
             use_vector=policy.use_dense,
             use_lexical=policy.use_lexical,
             lexical_relaxed=policy.lexical_relaxed,
+            grade_per_conjunct=policy.grade_per_conjunct,
             cache_db=cache_db,
         )
     except ImportError as exc:

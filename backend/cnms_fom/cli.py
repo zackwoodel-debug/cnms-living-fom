@@ -816,8 +816,11 @@ def main(argv: list[str] | None = None) -> int:
         "benchmark", help="Run the autoresearch benchmark in a throwaway database."
     )
     benchmark.add_argument("--policy", default="baseline")
-    benchmark.add_argument("--case-set", default="baseline",
-                           choices=["baseline", "answerable", "abstention", "hard"])
+    benchmark.add_argument(
+        "--case-set", default="baseline",
+        choices=["baseline", "answerable", "abstention", "hard", "dev", "holdout",
+                 "compound"],
+    )
     benchmark.add_argument("--compare", nargs="+", metavar="POLICY",
                            help="Compare these policies against the baseline.")
     benchmark.add_argument("--use-provider", action="store_true",

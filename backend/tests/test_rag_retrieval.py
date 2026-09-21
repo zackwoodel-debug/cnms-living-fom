@@ -212,7 +212,11 @@ def test_grading_reorders_by_grade_then_by_fusion_score(db):
     assert [g.grade for g in graded] == [3] * len(candidates)
     assert all(g.useful for g in graded)
     #  Without a db there is no cache, so every candidate cost a call.
-    assert cost == {"cached": 0, "called": len(candidates), "failed": 0}
+    assert cost == {
+        "cached": 0, "called": len(candidates), "failed": 0,
+        #  Zero unless the per-conjunct policy is on, which it is not here.
+        "conjunct_rescued": 0,
+    }
 
 
 def test_an_unparseable_grade_fails_closed(db):

@@ -114,6 +114,46 @@ Broadening the vocabulary is the goal; changing the question is not.
 Reply with JSON only: {"query": "<rewritten query>"}"""
 
 
+#  Clause joins. Only " and " and ";" — not "or", which usually narrows a single ask
+#  rather than adding a second one.
+_CONJUNCTS = re.compile(r",?\s+and\s+|;\s*")
+#  Terms worth carrying into every fragment: the subject is stated once in a compound
+#  question and each fragment needs it to be gradeable at all.
+_SUBJECT_HINT = re.compile(r"\b(?:[A-Z][a-z]?[a-z]?\d+[A-Za-z0-9]*|[A-Z]{2,})\b")
+
+
+def split_conjuncts(question: str) -> list[str]:
+    """A compound question as separate asks, **including the original**, or just itself.
+
+    §10e measured why this matters: on a compound question the grader marks a passage
+    down for the conjuncts it does *not* answer, costing exactly one grade point,
+    deterministically. The passage carrying 0.98 A/cycle scored 2 on "What growth per
+    cycle is reported for HfO2 ALD?" and 1 on the three-part version — and 1 is below
+    ``MIN_USEFUL_GRADE``, so it never reached the extractor.
+
+    The original question is always the first element and the caller keeps the best
+    grade, which makes this monotone by construction: a passage can only be graded
+    higher than it is today, never lower. That is deliberate. The fragments are not
+    guaranteed to be grammatical — they are grading queries, and what they need is one
+    ask's distinctive terms, not syntax. Subject tokens such as "HfO2" or "ALD" are
+    carried into fragments that lost them, because a fragment with no subject is not
+    gradeable.
+    """
+    parts = [part.strip(" ,;?") for part in _CONJUNCTS.split(question)]
+    parts = [part for part in parts if len(part.split()) >= 3]
+    if len(parts) < 2:
+        return [question]
+
+    subjects = _SUBJECT_HINT.findall(question)
+    fragments = []
+    for part in parts:
+        if subjects and not any(token in part for token in subjects):
+            part = f"{part} for {' '.join(dict.fromkeys(subjects))}"
+        fragments.append(part if part.endswith("?") else f"{part}?")
+    #  Original first: the caller may stop early, and it is the query of record.
+    return [question, *fragments]
+
+
 def grader_provider(answer_provider: ChatProvider) -> ChatProvider:
     """The model that grades and rewrites, which need not be the one that answers.
 
@@ -266,6 +306,7 @@ def grade_and_rerank(
     candidates: list[FusedHit],
     *,
     db=None,
+    per_conjunct: bool = False,
 ) -> tuple[list[GradedHit], dict]:
     """Grade every candidate and order by grade, then by fusion score.
 
@@ -291,8 +332,52 @@ def grade_and_rerank(
         _graded_from_payload(hit, payload, error=errors.get(index))
         for index, (hit, payload) in enumerate(zip(candidates, payloads, strict=True))
     ]
+
+    rescued = 0
+    if per_conjunct:
+        fragments = split_conjuncts(question)[1:]
+        if fragments:
+            #  Escalate only for a passage that would otherwise be *dropped*. That keeps
+            #  the extra calls proportional to the problem — a compound question with one
+            #  borderline passage costs a handful, not N x candidates — and it is exactly
+            #  the failure being fixed: §10e's passage was lost at grade 1.
+            for index, hit in enumerate(graded):
+                if hit.grade >= MIN_USEFUL_GRADE:
+                    continue
+                best, best_reason = hit.grade, hit.reason
+                for fragment in fragments:
+                    payload = cache.map_cached(
+                        db, [hit.fused],
+                        kind=cache.KIND_GRADE,
+                        key_of=lambda h, f=fragment: cache.grade_key(f, h.hit.text),
+                        model=getattr(provider, "model", "unknown"),
+                        prompt_version=GRADER_PROMPT_VERSION,
+                        call=lambda h, f=fragment: _call_grader(provider, f, h),
+                    )
+                    payloads_f, cached_f, called_f, errors_f = payload
+                    cached += cached_f
+                    called += called_f
+                    result = _graded_from_payload(
+                        hit.fused, payloads_f[0], error=errors_f.get(0)
+                    )
+                    if result.grade > best:
+                        best, best_reason = result.grade, (
+                            f"{result.reason} [graded against one conjunct of a compound "
+                            f"question: {fragment!r}]"
+                        )
+                    if best >= 3:
+                        break
+                if best > hit.grade:
+                    rescued += 1
+                    graded[index] = GradedHit(
+                        fused=hit.fused, grade=best, reason=best_reason
+                    )
+
     graded.sort(key=lambda g: (g.grade, g.fused.rrf_score), reverse=True)
-    return graded, {"cached": cached, "called": called, "failed": len(errors)}
+    return graded, {
+        "cached": cached, "called": called, "failed": len(errors),
+        "conjunct_rescued": rescued,
+    }
 
 
 def rewrite_query(provider: ChatProvider, question: str) -> str | None:
@@ -320,15 +405,20 @@ def rewrite_query(provider: ChatProvider, question: str) -> str | None:
     return rewritten
 
 
-def graded_and_costed(provider, question, candidates, *, db, record: dict) -> list[GradedHit]:
+def graded_and_costed(
+    provider, question, candidates, *, db, record: dict, per_conjunct: bool = False
+) -> list[GradedHit]:
     """``grade_and_rerank``, with the call count folded into the attempt record."""
-    graded, cost = grade_and_rerank(provider, question, candidates, db=db)
+    graded, cost = grade_and_rerank(
+        provider, question, candidates, db=db, per_conjunct=per_conjunct
+    )
     record["grader_calls"] = cost["called"]
     record["grader_cache_hits"] = cost["cached"]
     #  Recorded, not discarded. A grader that could not be reached fails each hit
     #  closed to grade 1, which drops the passage — so a transport outage looks
     #  exactly like a corpus with nothing relevant in it unless the count survives.
     record["grader_failed"] = cost["failed"]
+    record["conjunct_rescued"] = cost.get("conjunct_rescued", 0)
     return graded
 
 
@@ -346,6 +436,7 @@ def retrieve_with_correction(
     use_vector: bool = True,
     use_lexical: bool = True,
     lexical_relaxed: bool = False,
+    grade_per_conjunct: bool = False,
     cache_db=None,
 ) -> RetrievalOutcome:
     """Hybrid retrieve, grade, and retry once with a rewritten query if needed.
@@ -400,6 +491,7 @@ def retrieve_with_correction(
                 graded_and_costed(
                     grader, question, candidates,
                     db=cache_db if cache_db is not None else session, record=record,
+                    per_conjunct=grade_per_conjunct,
                 )
                 if grade
                 #  Ungraded: treat fusion order as the ranking and mark every

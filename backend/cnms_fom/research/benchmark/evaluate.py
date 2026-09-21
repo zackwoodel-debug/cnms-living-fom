@@ -34,7 +34,11 @@ import logging
 from dataclasses import dataclass, field
 
 from cnms_fom.research.benchmark.cases import DOCUMENTS_BY_KEY, BenchmarkCase, page_text
-from cnms_fom.research.contracts import ResearchBrief, convert_to_canonical
+from cnms_fom.research.contracts import (
+    ResearchBrief,
+    classify_unit,
+    convert_to_canonical,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +96,9 @@ class CaseResult:
     extraction_recall: float | None = None
     extraction_f1: float | None = None
     unit_accuracy: float | None = None
+    #  Claim shapes the case forbids that appeared anyway. A fabrication is not a
+    #  partial success, so any of these zeroes the case.
+    forbidden_present: int = 0
     context_completeness: float | None = None
     contradiction_detected: bool | None = None
     abstained: bool = False
@@ -128,6 +135,11 @@ class CaseResult:
 
         if self.n_claims:
             base -= UNSUPPORTED_CLAIM_PENALTY * (self.unsupported_claims / self.n_claims)
+        if self.forbidden_present:
+            #  Not scaled: "an invented claim is worse than a missing one" (§10d). A case
+            #  that reproduces a known fabrication has failed whatever else it got right,
+            #  and averaging that away is how a regression ships.
+            return 0.0
         return max(0.0, min(1.0, base))
 
     def as_dict(self) -> dict:
@@ -336,6 +348,36 @@ def evaluate_case(
             "Extraction not exercised in this run (no extracting provider), so extraction, unit, "
             "and context metrics are unavailable rather than zero."
         )
+
+    # --- what must NOT be there ------------------------------------------
+    #  The suite could previously assert only what should be found, so the §10d
+    #  fabrications could not become regression cases.
+    for forbidden in case.forbidden_claims:
+        for claim in brief.claims:
+            if claim.field_name != forbidden.field_name:
+                continue
+            if forbidden.units_dimension is not None and (
+                classify_unit(claim.units) != forbidden.units_dimension
+            ):
+                continue
+            if forbidden.any_numeric_value and claim.value is None:
+                continue
+            result.forbidden_present += 1
+            where = claim.evidence[0].citation if claim.evidence else "?"
+            result.diagnostics.append(
+                f"FORBIDDEN claim present: {claim.field_name}={claim.value} "
+                f"{claim.units!r} from {where}"
+                + (f" — {forbidden.why}" if forbidden.why else "")
+            )
+
+    for field_name in case.forbid_contradiction_fields:
+        for contradiction in brief.contradictions:
+            if contradiction.field_name == field_name:
+                result.forbidden_present += 1
+                result.diagnostics.append(
+                    f"FORBIDDEN contradiction reported on {field_name}: the corpus does "
+                    "not disagree here, so this is a manufactured disagreement."
+                )
 
     # --- contradictions ---------------------------------------------------
     if case.expected_contradiction_fields:

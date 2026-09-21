@@ -106,6 +106,12 @@ class StubExtractor:
 
     name = "stub"
     model = "stub-extractor"
+    #  Declares what the docstring above already says: this provider does not extract.
+    #  Load-bearing. `_should_abstain` treats "passages retrieved but no claims in any of
+    #  them" as grounds to abstain, which is right for a real extractor and wrong for a
+    #  fixture that returns an empty list by design — without this flag every answerable
+    #  case abstained offline and the whole suite read ~0.67.
+    extracts = False
 
     def __init__(self, coverage_threshold: float = STUB_GRADE_COVERAGE) -> None:
         self.coverage_threshold = coverage_threshold
@@ -203,7 +209,13 @@ def run_benchmark(
     )
     policy = policy or BASELINE
     cases = get_case_set(case_set)
-    extracting = provider is not None
+    #  `extracting` must mean "a provider that actually extracts", not "a provider object
+    #  exists". StubExtractor returns an empty claim list by design, so a run with it
+    #  scored every expected claim as missed and reported extraction_f1 = 0 as though it
+    #  had been measured — contradicting the stub's own promise that extraction metrics
+    #  come back unavailable. Passing the stub explicitly is now identical to passing
+    #  nothing, which is the truth.
+    extracting = provider is not None and getattr(provider, "extracts", True)
     provider = provider or StubExtractor()
 
     result = BenchmarkResult(

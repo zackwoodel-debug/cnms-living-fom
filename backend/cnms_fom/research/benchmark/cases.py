@@ -72,6 +72,27 @@ class ExpectedClaim:
 
 
 @dataclass(frozen=True)
+class ForbiddenClaim:
+    """A claim shape that must NOT appear in the brief.
+
+    The suite could only ever assert what *should* be found, so the §10d fabrications —
+    four purge times filed as growth per cycle, a material read as a growth rate — could
+    not become regression cases. A capability the benchmark cannot see is one a future
+    change can silently remove.
+
+    ``units_dimension`` reuses ``contracts.classify_unit`` rather than matching unit
+    spellings, so "6 s" and "6 seconds" are one rule.
+    """
+
+    field_name: str
+    #  Any claim under this field whose units are of this physical dimension.
+    units_dimension: str | None = None
+    #  Any claim under this field carrying a number at all.
+    any_numeric_value: bool = False
+    why: str = ""
+
+
+@dataclass(frozen=True)
 class BenchmarkCase:
     """One question with a known-correct outcome."""
 
@@ -94,6 +115,12 @@ class BenchmarkCase:
     #  Documents that look relevant and are not. Retrieving one is not an error;
     #  extracting a claim from it and presenting it as the answer is.
     distractor_documents: tuple[str, ...] = field(default_factory=tuple)
+    #  Claim shapes whose presence is a failure, however good the rest of the brief is.
+    forbidden_claims: tuple[ForbiddenClaim, ...] = field(default_factory=tuple)
+    #  Fields on which the corpus does NOT disagree, so reporting a contradiction would
+    #  be manufacturing one. Distinct from simply omitting the field from
+    #  ``expected_contradiction_fields``, which asserts nothing either way.
+    forbid_contradiction_fields: tuple[str, ...] = field(default_factory=tuple)
 
 
 BANNER = (
@@ -540,6 +567,119 @@ CASES: tuple[BenchmarkCase, ...] = (
     ),
 )
 
+#  Cases added in truth-set v3. The suite had no compound question at all, which is why
+#  three separate changes (grade-v3, lexical_relaxed, and next per-conjunct grading) could
+#  not be judged on it: it saw their cost and none of their benefit. It also had no way to
+#  assert that a fabrication stays absent, so the §10d failures could not become
+#  regressions.
+COMPOUND_AND_REGRESSION_CASES: tuple[BenchmarkCase, ...] = (
+    BenchmarkCase(
+        case_id="compound_gpc_and_density",
+        question=(
+            "What growth per cycle and what mass density are reported for HfO2 ALD from "
+            "TDMAH and water, and do the sources agree on the growth per cycle?"
+        ),
+        category="compound_question",
+        expected_documents=("hotwall", "crossflow"),
+        expected_pages=(("hotwall", 2), ("crossflow", 2), ("hotwall", 3)),
+        expected_claims=(
+            ExpectedClaim(field_name="growth_per_cycle_ang", value=0.98, units="A/cycle"),
+            ExpectedClaim(field_name="growth_per_cycle_ang", value=1.42, units="A/cycle"),
+            ExpectedClaim(field_name="rho", value=9.1, units="g/cm3"),
+        ),
+        expected_contradiction_fields=("growth_per_cycle_ang",),
+        techniques=("ald",),
+        notes=(
+            "Three facts across two documents and three pages, in one question. The real "
+            "question a scientist asks of a two-paper corpus, and the shape §10e measured "
+            "as costing one grade point per conjunct."
+        ),
+    ),
+    BenchmarkCase(
+        case_id="compound_window_and_pressure",
+        question=(
+            "Over what temperature range is the growth per cycle constant for hot-wall "
+            "HfO2 ALD, and what chamber pressure was used?"
+        ),
+        category="compound_question",
+        expected_documents=("hotwall",),
+        expected_pages=(("hotwall", 1), ("hotwall", 2)),
+        expected_claims=(
+            ExpectedClaim(field_name="pressure_torr", value=1.5, units="Torr"),
+        ),
+        techniques=("ald",),
+        notes=(
+            "Two conjuncts answered on two different pages of one document, so a passage "
+            "answering either must not be marked down for missing the other."
+        ),
+    ),
+    BenchmarkCase(
+        case_id="unit_variant_gpc",
+        question="What growth per cycle is reported for hot-wall HfO2 ALD from TDMAH?",
+        category="unit_normalisation",
+        expected_documents=("hotwall",),
+        expected_pages=(("hotwall", 2),),
+        expected_claims=(
+            #  0.098 nm/cycle IS 0.98 A/cycle. The gold is deliberately written in the
+            #  other unit so a normalisation failure cannot masquerade as a recall
+            #  failure — the confusion that made extraction_f1 = 0.397 uninterpretable.
+            ExpectedClaim(
+                field_name="growth_per_cycle_ang", value=0.098, units="nm/cycle"
+            ),
+        ),
+        techniques=("ald",),
+        notes="Gold in nm/cycle against a claim in A/cycle. Must match after conversion.",
+    ),
+    BenchmarkCase(
+        case_id="dimensional_negative_cycle_timing",
+        question="What dose and purge times were used for hot-wall HfO2 ALD?",
+        category="dimensional_guard",
+        expected_documents=("hotwall",),
+        expected_pages=(("hotwall", 1),),
+        forbidden_claims=(
+            ForbiddenClaim(
+                field_name="growth_per_cycle_ang", units_dimension="time",
+                why="§10d: four dose and purge times in seconds were filed as growth per "
+                "cycle, and the narrative reported them as a literature disagreement.",
+            ),
+            ForbiddenClaim(
+                field_name="material", any_numeric_value=True,
+                why="§10d: material = 2, from the digit in HfO2, was read downstream as "
+                "a growth per cycle of 2.0.",
+            ),
+        ),
+        techniques=("ald",),
+        notes=(
+            "A passage dense in seconds, asked about directly. The timings are legitimate "
+            "claims under their own names; what must never appear is one under a field "
+            "whose name declares Angstrom."
+        ),
+    ),
+    BenchmarkCase(
+        case_id="negative_disagreement_density",
+        question=(
+            "Do the hot-wall and cross-flow papers disagree about the mass density of "
+            "their HfO2 films?"
+        ),
+        category="negative_disagreement",
+        expected_documents=("hotwall",),
+        expected_pages=(("hotwall", 3),),
+        expected_claims=(
+            ExpectedClaim(field_name="rho", value=9.1, units="g/cm3"),
+        ),
+        forbid_contradiction_fields=("rho",),
+        techniques=("ald",),
+        notes=(
+            "Only the hot-wall paper states a density, so the honest answer reports that "
+            "one value and says the other source is silent. Manufacturing a disagreement "
+            "out of one number is the failure this catches — the mirror of "
+            "cross_paper_disagreement."
+        ),
+    ),
+)
+
+CASES = CASES + COMPOUND_AND_REGRESSION_CASES
+
 CASES_BY_ID = {case.case_id: case for case in CASES}
 
 CASE_SETS: dict[str, tuple[str, ...]] = {
@@ -549,6 +689,33 @@ CASE_SETS: dict[str, tuple[str, ...]] = {
     "answerable": tuple(case.case_id for case in CASES if not case.should_abstain),
     #  Only the questions without one, for measuring abstention.
     "abstention": tuple(case.case_id for case in CASES if case.should_abstain),
+    #  Tuning happens here. Any change judged on dev must then be reported on holdout.
+    "dev": (
+        "direct_lookup_gpc",
+        "cross_paper_disagreement",
+        "table_retrieval_pld",
+        "permittivity_with_context",
+        "density_lookup",
+        "absent_sputtering",
+        "compound_gpc_and_density",
+        "unit_variant_gpc",
+        "dimensional_negative_cycle_timing",
+    ),
+    #  Never tuned against. Reported alongside dev so overfitting is visible.
+    "holdout": (
+        "material_disambiguation",
+        "contextless_value",
+        "decomposition_temperature",
+        "technique_disambiguation",
+        "absent_gaas_on_ge",
+        "absent_breakdown_field",
+        "compound_window_and_pressure",
+        "negative_disagreement_density",
+    ),
+    #  Only the cases whose questions ask for more than one fact.
+    "compound": tuple(
+        case.case_id for case in CASES if case.category == "compound_question"
+    ),
     #  The cases that catch the expensive mistakes.
     "hard": (
         "cross_paper_disagreement",
@@ -572,7 +739,7 @@ def get_case_set(name: str) -> tuple[BenchmarkCase, ...]:
 #  v2 corrects two gold field names that scored a correct extraction as a miss (§10e),
 #  so every extraction metric measured under v1 — including extraction_f1 = 0.397 — is
 #  void as a baseline rather than merely old.
-CASE_SET_VERSION = "v2-gold-keys"
+CASE_SET_VERSION = "v3-compound-and-negative"
 
 
 def seed_corpus(db, *, embed: bool = False) -> dict[str, int]:
