@@ -19,6 +19,14 @@ class Settings(BaseSettings):
         description="SQLAlchemy URL for the Postgres instance.",
     )
     db_echo: bool = False
+    #  A claim about the database, not a feature switch. It selects the ORM type for
+    #  ``document_chunks.embedding`` at import (``db/base.embedding_column_type``),
+    #  and nothing can make it agree with the schema it is pointed at. Migration 0009
+    #  converts the column to ``vector`` exactly when the ``vector`` extension is
+    #  present, so the correct value is "does this database have that extension".
+    #  Either direction of disagreement breaks retrieval — see
+    #  ``rag_backend.vectorstore.embedding_storage_mismatch`` — so a mismatch is
+    #  reported at startup and in ``/health/ready`` rather than left to be found.
     pgvector_enabled: bool = True
     embedding_dim: int = 768
 

@@ -82,6 +82,18 @@ async def lifespan(app: FastAPI):
         with get_engine().connect() as connection:
             connection.execute(text("SELECT 1"))
         logger.info("Database reachable")
+
+        #  Reported here as well as in /health/ready, because a deployment that is
+        #  about to fail every retrieval should say so in the log the operator is
+        #  already watching, not only when something thinks to ask.
+        from cnms_fom.rag_backend.vectorstore import embedding_storage_mismatch
+
+        mismatch = embedding_storage_mismatch(get_engine())
+        if mismatch:
+            #  error only when ingestion is blocked; the other direction costs an
+            #  index, not correctness.
+            log = logger.error if not settings.pgvector_enabled else logger.warning
+            log("%s", mismatch)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Database unreachable at startup: %s", exc)
 

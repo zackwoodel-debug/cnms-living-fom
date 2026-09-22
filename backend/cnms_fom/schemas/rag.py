@@ -95,6 +95,9 @@ class CorpusStatsResponse(BaseModel):
     total_chunks: int
     embedded_chunks: int
     pgvector: bool
+    #  One entry per embedding model in the corpus. More than one means the
+    #  similarities are only comparable within each group.
+    embeddings_by_model: dict[str, int] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

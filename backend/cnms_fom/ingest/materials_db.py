@@ -56,6 +56,7 @@ from cnms_fom.db.models import (
     SpectralPoint,
     SpectralSeries,
 )
+from cnms_fom.fom_engine.identity import FormulaNotCanonical, reduced_formula
 
 from .labels import axis_to_tensor_component, parse_dataset_label
 
@@ -383,10 +384,21 @@ def promote(
         if not formula:
             return None
 
+        #  The same reduction the API uses. This path assigned
+        #  ``formula_reduced=formula`` unreduced, so an external source writing
+        #  ``Hf2O4`` created a second material for a film already recorded as
+        #  ``HfO2``. Skipped rather than guessed when it cannot be reduced: a row
+        #  with a wrong identity is harder to find later than a row that is absent.
+        try:
+            reduced = reduced_formula(formula)
+        except FormulaNotCanonical as exc:
+            logger.warning("Skipping external material %s: %s", external_id, exc)
+            return None
+
         found = (
             session.query(Material)
             .filter(
-                Material.formula_reduced == formula,
+                Material.formula_reduced == reduced,
                 Material.polymorph == polymorph,
                 Material.specimen_form == specimen_form,
             )
@@ -395,7 +407,7 @@ def promote(
         if found is None:
             found = Material(
                 formula=formula,
-                formula_reduced=formula,
+                formula_reduced=reduced,
                 polymorph=polymorph,
                 specimen_form=specimen_form,
                 source_database=path.name,

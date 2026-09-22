@@ -100,16 +100,22 @@ def ready() -> dict:
     except Exception as exc:  # noqa: BLE001
         checks["retrieval"] = {"ok": False, "error": str(exc)}
 
-    #  A config flag that disagrees with the schema takes retrieval down completely,
-    #  and the failure it produces on its own names pgvector rather than the flag.
+    #  PGVECTOR_ENABLED is a claim about the schema that nothing enforces. Reported
+    #  either way, but only one direction is a fault: with the flag off over a vector
+    #  column, reads work and ingestion fails, and a system that answers queries while
+    #  silently refusing new documents gets diagnosed as a corpus problem. With the
+    #  flag on over a json column the results are correct and only the ANN index is
+    #  missing, which is a performance ceiling, not a broken deployment.
     try:
         from cnms_fom.db.base import get_engine as _engine_for_embedding
         from cnms_fom.rag_backend.vectorstore import embedding_storage_mismatch
 
         mismatch = embedding_storage_mismatch(_engine_for_embedding())
         if mismatch:
-            checks.setdefault("retrieval", {})["ok"] = False
-            checks["retrieval"]["embedding_storage_mismatch"] = mismatch
+            retrieval = checks.setdefault("retrieval", {})
+            retrieval["embedding_storage_mismatch"] = mismatch
+            if not settings.pgvector_enabled:
+                retrieval["ok"] = False
     except Exception:  # noqa: BLE001 - a check that cannot run reports nothing
         pass
 

@@ -1639,6 +1639,201 @@ wrong, and no schema assertion would notice. Verified falsifiable: reintroducing
 
 ---
 
+## 10j. Second audit pass: three more of the same shape
+
+Bug 21 suggested what to look for, so this pass read for a *shape* rather than for
+mistakes: **a component that is optional by design taking something non-optional down
+with it**, and **a report that describes intent rather than behaviour**. Three more
+turned up, one of them worse than the bug that prompted the search.
+
+### Bug 23: an optional cache write destroyed the caller's transaction
+
+`cache.get` and `cache.put` promise never to raise — "a cache that can fail a request
+is worse than no cache" — and they kept that promise by calling `db.rollback()`. That
+is the *caller's* transaction. The cache is called from the extraction and grading
+loops, where the session is holding a half-built brief and its claims, so one failed
+cache write silently discarded real work and the following commit wrote nothing. No
+error surfaced, because the failure had already been logged as a cache miss.
+
+Reproduced on Postgres: a `Document` flushed before the cache call was gone after it,
+and `commit()` wrote zero rows.
+
+The trigger is not exotic. `llm_max_parallel` is 4 and the cases are *designed* to
+share passages — "twelve cases over one corpus share most of their passages" is the
+argument for the cache existing — so two workers racing to insert the same key is the
+expected case, not the unlucky one. The `length(cache_key) = 64` CHECK rules out the
+malformed-key path, which left the race as the realistic one.
+
+**A SAVEPOINT alone does not fix it**, and the reason is worth recording because it
+looks like it should. A failed `Session.flush()` cannot be contained by one:
+SQLAlchemy rolls the savepoint back itself and then requires a full
+`Session.rollback()` before the session can be used again, since a half-applied flush
+may have left the identity map inconsistent. Measured, not assumed — a contained
+flush failure leaves the next query raising `PendingRollbackError`. So the cache now
+writes through Core `insert`/`update` statements, which carry no ORM state and which
+a savepoint *does* contain. It costs nothing: one table, no relationships.
+
+Two things improved on the way past: `hit_count` is incremented in SQL rather than
+read-modify-written, so two workers cannot each overwrite the other's increment; and
+the savepoint is released on the success path, since a dangling one would turn a
+contained failure into a permanent outage.
+
+### Bug 24: embeddings from two models were compared as if commensurable
+
+`search_chunks` filtered on technique and nothing else. `embedding_model` was recorded
+on every chunk at ingest and **read by nothing**. A cosine similarity between vectors
+from two different embedding models is not weak evidence — the coordinates are in
+unrelated bases, and the number means nothing. `nomic-embed-text` is 768-dimensional
+and so are many others, so the width check in `_rank_in_python` cannot notice.
+
+Change the embedding model, re-ingest some documents, and the corpus silently returns
+meaningless rankings for part of it. Now: retrieval compares only vectors from the
+same model; ingest warns *once*, cheaply, when it is about to mix two; and
+`corpus_stats` reports the breakdown, so a mixed corpus is visible instead of
+inferred. An unlabelled chunk is still included, because it predates the column and
+excluding it would silently drop an older corpus — the breakdown names it.
+
+Separately, `_rank_in_python` skipped width-mismatched chunks silently. Skipping is
+right; doing it without a count is how a changed `EMBEDDING_DIM` becomes a corpus that
+answers from a shrinking subset of itself while every metric still looks healthy.
+
+### Bug 25: material identity depended on which packages were installed
+
+Eq. (3) identifies a material by composition **plus** polymorph **plus** specimen
+form, and `uq_material_identity` enforces the triple, which makes `formula_reduced` an
+identity field. It was computed three ways:
+
+* `routers/materials.py` tried pymatgen and, on `ImportError`, used the formula
+  exactly as typed. pymatgen is the optional `descriptors` extra — not installed on
+  this machine — so whether `Hf2O4` and `HfO2` are one material or two depended on
+  the installation.
+* `ingest/materials_db.py` assigned `formula_reduced=formula` with **no reduction at
+  all**, so whatever an external source wrote became the identity.
+* Nothing recorded which had been applied.
+
+A corpus written with the extra installed and then added to without it accumulates
+duplicates the unique constraint cannot see. The protocol's rule is that identity is
+not inferred, and an identity that varies with the environment is inferred by
+definition.
+
+Both writers now go through `fom_engine/identity.py`. pymatgen canonicalises when
+present, because it is the domain convention and existing rows were written with it.
+When it is absent, a formula that is *already* canonical is accepted unchanged —
+`HfO2` reduces to itself, and the GCD check needs no dependency — and anything else is
+refused with a message naming what would fix it. The two environments never disagree
+silently: one accepts, the other says it cannot. Fractional occupancies
+(`Hf0.5Zr0.5O2`) are taken as given, since reducing them is not defined and refusing
+them would reject legitimate alloys.
+
+### Bug 26: a capability report that described the config
+
+`corpus_stats` called `_pgvector_available()` with **no session**, which answers from
+the flag alone. So `pgvector: true` was served on SQLite and over a json column —
+through `/rag/stats` and into the assistant's tool output — while ranking was
+happening in numpy. The model was being told the system had an ANN index it did not
+have.
+
+### Deferred here, then done — see §10k
+
+`pgvector_enabled` defaults to `True`, a claim about a database the default cannot
+verify, and this pass recorded that eliminating the mismatch properly "means making the
+ORM type tolerant of both representations, which is a larger change than this pass
+warranted". That change was then made, and it turned up two more bugs — one of them
+pre-existing and quietly wrong for as long as the benchmark has existed.
+
+### What the pass says about the codebase
+
+A type-parity sweep across all 36 tables found **zero** further ORM/schema type
+mismatches after 0009, so the embedding column was the only one. That is a useful
+negative result: the divergence was a one-off, not a pattern.
+
+The three real bugs were all in the same category — *optional things with
+non-optional consequences*. The cache may miss but may not delete; the embedding
+model label may be absent but may not be ignored; pymatgen may be uninstalled but may
+not silently change what counts as a material. None would have been found by reading
+for incorrect code, because each is locally correct.
+
+---
+
+## 10k. Making the mismatch stop mattering, and what that turned up
+
+### The tolerant column type
+
+`db/embedding_type.py` makes both storage shapes readable under either mapping.
+Postgres accepts the same text literal `'[0.1,0.2]'` for a `json` column and for a
+`vector` column, and returns a `list` from the first and a `str` from the second, so a
+result processor accepting either normalises them back to `list[float]`. All four
+flag/column combinations now read and rank correctly, with identical similarities.
+
+`TolerantVector` subclasses pgvector's `Vector` rather than wrapping it in a
+`TypeDecorator`, because a `TypeDecorator` does not forward a custom
+`comparator_factory` and losing `<=>` would defeat the point of enabling pgvector.
+
+**Writes are asymmetric, and not for want of trying.** Writing into a `vector` column
+through the JSON mapping is not possible: Postgres renders the bind as
+`%(embedding)s::JSON` — `render_bind_cast` in `dialects/postgresql/json.py` — and
+refuses `json` into `vector`, even for NULL. That cast resists suppression from the
+type. Overriding `bind_expression` does not reach it, because the compiler consults
+`_unwrapped_dialect_impl`; overriding `load_dialect_impl` does not either, because
+`dialect.type_descriptor` re-creates whatever it returns as the canonical Postgres JSON
+and drops the override; and setting `impl` to a non-casting instance fails the same way.
+Writing correctly would require the type to know the column's real shape, which is
+exactly what is not knowable at import.
+
+### Correction: migration 0009 was keyed on the wrong thing
+
+0009 originally converted the column whenever the `vector` extension was present,
+reasoning that a schema should not depend on a runtime setting. That reasoning was
+wrong here, and the test suite is what proved it: the conversion breaks **every**
+deployment running `PGVECTOR_ENABLED=false` on a database that merely has pgvector
+installed, because such a database can then no longer accept an insert at all.
+
+The flag is not incidental configuration — it is what `embedding_column_type` reads to
+pick the ORM type. Following it is the only thing that makes the schema and the mapping
+agree by construction. The usual objection to flag-keyed migrations is that a one-shot
+revision leaves no way back after the flag changes; here there is one, because 0009
+downgrades cleanly: `alembic downgrade 0008 && alembic upgrade head` re-evaluates it.
+
+### Bug 27: an un-embedded chunk counted as embedded
+
+Found while diagnosing a test that my own change had broken, and older than any of this.
+
+SQLAlchemy's `JSON` stores Python `None` as the JSON scalar `'null'` unless told
+otherwise, and `rag_backend/ingest.py` passes `embedding=vector` with `vector` None
+whenever it runs with `embed=False`. So a chunk that was never embedded satisfied
+`embedding IS NOT NULL`, and two things believed it:
+
+* `corpus_stats` reported those chunks under `embedded_chunks`;
+* `benchmark._resolve_retrievers` concluded the dense leg was available on a corpus
+  with no vectors in it — so its "lexical-only; its score is not comparable with a run
+  that had both retrievers" note **never fired**, and exactly the comparison it exists
+  to prevent was available to make.
+
+That last one matters for every dense-versus-lexical number in this document that came
+from a run seeded without embeddings. The guard was there; it was reading a field that
+could not be false.
+
+Fixed with `none_as_null=True`. This is the protocol's own rule at the storage layer: a
+JSON `null` is a placeholder standing in for a quantity nobody measured.
+
+### What the episode says about the method
+
+The tolerant type introduced a regression — an *omitted* embedding also became JSON
+`null`, so the count went from wrong to wronger — and an existing test caught it within
+one run. Chasing that regression is what exposed bug 27, which no one was looking for
+and which had been silently weakening a comparability guard.
+
+Two further notes worth keeping:
+
+* Three of the five things tried to suppress the bind cast looked correct and did
+  nothing. The compiled SQL was checked each time rather than the behaviour assumed,
+  which is the only reason the dead ends were recognised as dead ends.
+* Each fix in this pass was made falsifiable before being believed: reverting
+  `none_as_null` fails the two new NULL tests, and reverting the savepoint fails the two
+  cache tests.
+
+---
+
 ## 11. Known limitations and deferred work
 
 **Measured, and significant:**

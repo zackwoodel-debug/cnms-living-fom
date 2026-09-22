@@ -400,7 +400,17 @@ def test_pgvector_is_not_used_against_a_sqlite_session(db, monkeypatch):
 
     monkeypatch.setattr(
         vectorstore, "get_settings",
-        lambda: type("S", (), {"pgvector_enabled": True, "embedding_dim": 768})(),
+        lambda: type(
+            "S",
+            (),
+            {
+                "pgvector_enabled": True,
+                "embedding_dim": 768,
+                #  search_chunks filters on this: vectors from two models are not
+                #  comparable, so the double has to name one.
+                "ollama_embed_model": "nomic-embed-text",
+            },
+        )(),
     )
     pytest.importorskip("pgvector.sqlalchemy")
 
@@ -416,7 +426,17 @@ def test_a_vector_search_on_sqlite_returns_results_rather_than_raising(
 
     monkeypatch.setattr(
         vectorstore, "get_settings",
-        lambda: type("S", (), {"pgvector_enabled": True, "embedding_dim": 768})(),
+        lambda: type(
+            "S",
+            (),
+            {
+                "pgvector_enabled": True,
+                "embedding_dim": 768,
+                #  search_chunks filters on this: vectors from two models are not
+                #  comparable, so the double has to name one.
+                "ollama_embed_model": "nomic-embed-text",
+            },
+        )(),
     )
     #  Must not raise: the portable path handles it.
     hits = vectorstore.search_chunks(db, [0.0] * 768, k=3)

@@ -65,18 +65,20 @@ def session_scope() -> Iterator[Session]:
 def embedding_column_type(dim: int | None = None):
     """Column type for an embedding vector.
 
-    pgvector when installed *and* enabled, which buys indexed ANN search;
-    otherwise JSON, so the schema still loads and the RAG store ranks in Python.
-    Keeping the choice here means nothing else has to branch on it.
+    pgvector when installed *and* enabled, which buys indexed ANN search; otherwise
+    JSON, so the schema still loads and the RAG store ranks in Python. Keeping the
+    choice here means nothing else has to branch on it.
+
+    Both variants are tolerant of the *other* storage shape. This flag is read at
+    import, before anything has looked at the database, and migration 0001 created the
+    column as json regardless of it — so the two disagree in real deployments, and
+    each disagreement used to break every read of a chunk. See
+    ``db/embedding_type.py`` for why one bind format serves both column types.
     """
-    from sqlalchemy import JSON
+    from cnms_fom.db.embedding_type import TolerantJSON, embedding_vector_type
 
     settings = get_settings()
     dim = dim or settings.embedding_dim
     if not settings.pgvector_enabled:
-        return JSON
-    try:
-        from pgvector.sqlalchemy import Vector
-    except ImportError:  # pragma: no cover - depends on optional extra
-        return JSON
-    return Vector(dim)
+        return TolerantJSON()
+    return embedding_vector_type(dim) or TolerantJSON()
