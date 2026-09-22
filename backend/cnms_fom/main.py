@@ -90,7 +90,10 @@ async def lifespan(app: FastAPI):
 
         mismatch = embedding_storage_mismatch(get_engine())
         if mismatch:
-            logger.error("%s", mismatch)
+            #  error only when ingestion is blocked; the other direction costs an
+            #  index, not correctness.
+            log = logger.error if not settings.pgvector_enabled else logger.warning
+            log("%s", mismatch)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Database unreachable at startup: %s", exc)
 

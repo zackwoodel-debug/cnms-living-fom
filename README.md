@@ -169,25 +169,35 @@ cnms-fom migrate current            # what revision is this database at?
 cnms-fom migrate up | down
 ```
 
-### pgvector: the flag describes the schema, it does not change it
+### pgvector: the flag and the schema have to agree
 
 `PGVECTOR_ENABLED` selects the column type the ORM maps `document_chunks.embedding`
-to, and it is read at import, before anything has looked at the database. Nothing
-makes it agree with the database it is pointed at, and **either direction of
-disagreement breaks retrieval**:
+to, and it is read at import, before anything has looked at the database. Migration
+0009 makes the schema follow it — converting the column to `vector` and building the
+HNSW index when the flag is on *and* the `vector` extension is installed — so a
+migrated database agrees with the mapping by construction.
+
+The column type is tolerant of both storage shapes, so a disagreement no longer breaks
+reads:
 
 | Setting | Column | What happens |
 |---|---|---|
-| `true` | `vector` | Correct. Indexed ANN search. |
-| `false` | `json` | Correct. Ranking happens in Python. |
-| `true` | `json` | Every read of a chunk fails. Retrieval is down, not degraded. |
-| `false` | `vector` | Embeddings read back as strings. Dense search dies **silently** and answers come from lexical search alone. |
+| `true` | `vector` | Indexed ANN search. |
+| `false` | `json` | Ranking in Python. |
+| `true` | `json` | Correct results, no ANN index — dense search scans every chunk. |
+| `false` | `vector` | Existing rows read fine, but **ingesting fails**: Postgres refuses a `json` bind into a `vector` column. |
 
-Migration 0009 converts the column to `vector` exactly when the `vector` extension is
-installed, so after `alembic upgrade head` the correct setting is "does this database
-have that extension". Both mismatches are reported at startup and in `/health/ready`
-as `retrieval.ok: false`, with the remedy in the message — you should not have to
-diagnose this from a stack trace.
+Only the last is a fault, and it arises from turning the flag off after having it on.
+The remedy is to set it back, or to re-run the migration so the schema follows the new
+value:
+
+```bash
+alembic downgrade 0008 && alembic upgrade head
+```
+
+Both mismatches are reported at startup and in `/health/ready` under
+`checks.retrieval.embedding_storage_mismatch`, with the remedy in the message — you
+should not have to diagnose this from a stack trace.
 
 ```bash
 psql -d cnms_fom -c "SELECT udt_name FROM information_schema.columns \

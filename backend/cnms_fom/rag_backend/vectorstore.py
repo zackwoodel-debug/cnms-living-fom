@@ -124,10 +124,6 @@ _EMBEDDING_IS_VECTOR: weakref.WeakKeyDictionary[object, bool] = (
 )
 
 
-class EmbeddingStorageMismatch(RuntimeError):
-    """``PGVECTOR_ENABLED`` disagrees with how this database stores embeddings."""
-
-
 def _embedding_is_vector(bind) -> bool:
     """Whether ``document_chunks.embedding`` is a pgvector column in this database.
 
@@ -188,33 +184,30 @@ def _embedding_is_vector(bind) -> bool:
 def embedding_storage_mismatch(session_or_bind) -> str | None:
     """Describe the ORM/column type disagreement, or None when there is none.
 
-    ``embedding_column_type`` picks the ORM type at import time from
-    ``PGVECTOR_ENABLED``. Nothing makes that flag agree with the database it is
-    pointed at, and migration 0001 creates ``embedding`` as ``json`` regardless of
-    it, so both directions occur in practice. Both are broken, and they fail
-    differently:
+    ``PGVECTOR_ENABLED`` selects the ORM type at import, before anything has looked at
+    the database, and migration 0001 created ``embedding`` as ``json`` regardless of
+    it — so both directions occur in real deployments.
 
-    **Flag on, json column.** The ORM maps ``Vector``, so pgvector's result parser
-    gets a list where it expects its own text format and raises ``'list' object has
-    no attribute 'split'`` on every chunk row. Retrieval is down, not degraded: the
-    portable path reads the same column, and the traceback names a third-party file
-    rather than the setting responsible.
+    Neither is fatal any more. ``db/embedding_type.py`` makes both column shapes
+    *readable* under either mapping, so retrieval keeps working through a mismatch
+    instead of failing on every chunk row. What remains is worth saying out loud:
 
-    **Flag off, vector column.** The ORM maps ``JSON``, which reads a vector column
-    back as the *string* ``'[0.1,0.2,...]'``. ``_rank_in_python`` then raises on
-    ``np.asarray(..., dtype=float)``, the dense leg is dropped as an optional
-    retriever, and the system serves lexical-only results indefinitely without
-    saying so. This is the quieter of the two and the more dangerous.
+    * flag on, ``json`` column — correct results, no ANN index. A performance ceiling
+      that looks like nothing at all until the corpus grows.
+    * flag off, ``vector`` column — reads fine, but an **ingest will fail**: Postgres
+      refuses a ``json`` bind into a ``vector`` column, and the cast cannot be
+      suppressed from the type. Reading working while writing does not is the kind of
+      split that gets diagnosed as a corpus problem.
 
-    Returns a message rather than raising, so startup and ``/health/ready`` can
-    report it — how this codebase surfaces a bad environment.
+    Returns a message rather than raising, because neither case justifies refusing a
+    query. Startup and ``/health/ready`` report it.
     """
     settings = get_settings()
     try:
         bind = getattr(session_or_bind, "get_bind", lambda: session_or_bind)()
         if bind.dialect.name != "postgresql":
-            #  SQLite has no vector type, so the ORM's JSON mapping is the only
-            #  shape available and cannot disagree with anything.
+            #  SQLite has no vector type, so the JSON mapping is the only shape
+            #  available and cannot disagree with anything.
             return None
         column_is_vector = _embedding_is_vector(bind)
     except Exception:  # noqa: BLE001 - a check that cannot run must not block a request
@@ -225,44 +218,18 @@ def embedding_storage_mismatch(session_or_bind) -> str | None:
 
     if settings.pgvector_enabled:
         return (
-            "PGVECTOR_ENABLED is true, so document_chunks.embedding is mapped as a "
-            "pgvector column, but this database stores it as json. Every read of a "
-            "chunk fails, so retrieval is down rather than degraded. Run "
-            "'alembic upgrade head' to convert the column (migration 0009), or set "
-            "PGVECTOR_ENABLED=false to use the portable path."
+            "PGVECTOR_ENABLED is true, but this database stores document_chunks."
+            "embedding as json. Retrieval works and ranks in Python; what is missing is "
+            "the ANN index, so dense search scans every chunk. Run 'alembic upgrade "
+            "head' to convert the column (migration 0009), or set "
+            "PGVECTOR_ENABLED=false to stop claiming an index that is not there."
         )
     return (
-        "PGVECTOR_ENABLED is false, so document_chunks.embedding is mapped as JSON, "
-        "but this database stores it as a pgvector column. Embeddings read back as "
-        "strings rather than numbers, so the dense retriever fails silently and every "
-        "answer comes from lexical search alone. Set PGVECTOR_ENABLED=true to match "
-        "the schema."
+        "PGVECTOR_ENABLED is false, but this database stores document_chunks.embedding "
+        "as a pgvector column. Existing rows read correctly, but ingesting new ones "
+        "will fail: Postgres refuses a json bind into a vector column. Set "
+        "PGVECTOR_ENABLED=true to match the schema."
     )
-
-
-def assert_embedding_storage_matches(session) -> None:
-    """Raise when the disagreement makes retrieval impossible, not merely degraded.
-
-    Called before a query that loads chunks, so the failure names the setting
-    responsible instead of surfacing from inside pgvector's result parser.
-
-    Only the flag-on-json direction raises. There, the ORM maps ``Vector`` over a
-    json column and *every* read of a chunk fails, including the lexical leg's — so
-    there is no partial answer to give, and per this module's own rule a search that
-    could not run must not report an empty corpus.
-
-    The flag-off-vector direction deliberately does not raise. Lexical retrieval
-    still works, the dense leg fails into the existing ``dense_failure`` path and is
-    reported as degraded, and ``/health/ready`` names the cause. Raising there would
-    take a partly working deployment down over a setting, which is a worse trade than
-    serving lexical results that announce themselves as degraded.
-    """
-    settings = get_settings()
-    if not settings.pgvector_enabled:
-        return
-    message = embedding_storage_mismatch(session)
-    if message is not None:
-        raise EmbeddingStorageMismatch(message)
 
 
 def search_chunks(
@@ -281,10 +248,6 @@ def search_chunks(
     a confident answer gets built on irrelevant context.
     """
     from cnms_fom.db.models import Document, DocumentChunk
-
-    #  Both the pgvector and the portable branch read the embedding column, so a
-    #  type mismatch is checked once here rather than in each of them.
-    assert_embedding_storage_matches(session)
 
     query = session.query(DocumentChunk, Document).join(
         Document, DocumentChunk.document_id == Document.id

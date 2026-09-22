@@ -291,3 +291,78 @@ def test_both_material_writers_use_the_same_reduction():
         assert "formula_reduced=formula," not in source, (
             f"{module.__name__} still stores an unreduced formula as the identity."
         )
+
+
+# ---------------------------------------------------------------------------
+# Bug 27: an un-embedded chunk counted as embedded
+# ---------------------------------------------------------------------------
+
+
+def test_a_chunk_with_no_embedding_is_sql_null_not_json_null(db_session):
+    """Absent has to be absent in the column, not a JSON ``null`` sitting in it.
+
+    SQLAlchemy's ``JSON`` stores Python ``None`` as the JSON scalar ``'null'`` unless
+    told otherwise, and ``rag_backend.ingest`` passes ``embedding=vector`` with
+    ``vector`` None whenever it runs with ``embed=False``. So a chunk that was never
+    embedded satisfied ``embedding IS NOT NULL``, and two things believed it:
+
+    * ``corpus_stats`` reported those chunks under ``embedded_chunks``;
+    * ``benchmark._resolve_retrievers`` concluded the dense leg was available on a
+      corpus with no vectors, so its "lexical-only, not comparable" note never fired
+      and two scores that were not comparable looked as though they were.
+
+    This is the protocol's own rule at the storage layer: a JSON ``null`` here is a
+    placeholder standing in for a quantity nobody measured.
+    """
+    from sqlalchemy import func, text
+
+    document = _document("sha-null", title="unembedded")
+    db_session.add(document)
+    db_session.flush()
+    db_session.add_all([
+        #  Explicit None is the case ingest actually produces.
+        DocumentChunk(document_id=document.id, chunk_index=0, text="a", embedding=None),
+        #  Omitted, for completeness: both must land as NULL.
+        DocumentChunk(document_id=document.id, chunk_index=1, text="b"),
+    ])
+    db_session.commit()
+
+    embedded = (
+        db_session.query(func.count(DocumentChunk.id))
+        .filter(DocumentChunk.embedding.isnot(None))
+        .scalar()
+    )
+    assert embedded == 0, (
+        f"{embedded} chunks with no embedding satisfy `embedding IS NOT NULL`. "
+        "Anything counting embedded chunks is overcounting, and the benchmark will "
+        "score a lexical-only run as though it had both retrievers."
+    )
+
+    stored = db_session.execute(
+        text("SELECT embedding FROM document_chunks ORDER BY chunk_index")
+    ).scalars().all()
+    assert stored == [None, None], f"Stored {stored!r} rather than SQL NULL."
+
+
+def test_corpus_stats_does_not_count_unembedded_chunks(db_session):
+    """The same bug seen through the report that surfaces it to the API."""
+    from cnms_fom.rag_backend.vectorstore import corpus_stats
+
+    document = _document("sha-count", title="mixed emptiness")
+    db_session.add(document)
+    db_session.flush()
+    db_session.add_all([
+        DocumentChunk(document_id=document.id, chunk_index=0, text="a", embedding=None),
+        DocumentChunk(
+            document_id=document.id, chunk_index=1, text="b",
+            embedding_model="nomic-embed-text", embedding=[0.1] * 768,
+        ),
+    ])
+    db_session.commit()
+
+    stats = corpus_stats(db_session)
+    assert stats["total_chunks"] == 2
+    assert stats["embedded_chunks"] == 1, (
+        f"embedded_chunks is {stats['embedded_chunks']} for one embedded chunk."
+    )
+    assert stats["embeddings_by_model"] == {"nomic-embed-text": 1}

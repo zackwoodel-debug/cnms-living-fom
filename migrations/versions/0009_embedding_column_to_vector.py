@@ -22,10 +22,21 @@ the trade: after it runs, a pgvector-equipped database wants ``PGVECTOR_ENABLED=
 and ``embedding_storage_mismatch`` says so at startup and in ``/health/ready`` rather
 than leaving it to be discovered.
 
-**Conditional on the extension, not on the flag.** A schema that depends on a runtime
-setting is how the original divergence happened. Where ``CREATE EXTENSION vector`` has
-not been run this is a no-op and the column stays json, which is the working
-configuration for a deployment with no pgvector.
+**Conditional on the extension *and* on the flag**, and the second half took a
+correction to get right. Keying it on the extension alone looked more principled — a
+schema that depends on a runtime setting is how the original divergence happened — but
+it converts the column for every deployment that merely *has* pgvector installed,
+including those running ``PGVECTOR_ENABLED=false``. Those then cannot insert a chunk at
+all: with the JSON mapping Postgres renders the bind as ``%(embedding)s::JSON`` and
+refuses ``json`` into a ``vector`` column, even for NULL. That broke ingestion and the
+test suite.
+
+The flag is not incidental configuration here: it is what ``embedding_column_type``
+reads to choose the ORM type. Following it is therefore the only thing that makes the
+schema and the mapping agree *by construction* rather than by coincidence. If the flag
+is changed later, ``alembic downgrade 0008 && alembic upgrade head`` re-evaluates it —
+so there is a way back, which is what the one-shot objection to flag-keyed migrations
+is really about.
 
 **No values are altered.** ``embedding::text::vector`` reparses what is already
 there. A row whose array length disagrees with ``embedding_dim`` cannot be cast, and
@@ -74,12 +85,22 @@ def _embedding_dim() -> int:
     return int(get_settings().embedding_dim)
 
 
+def _pgvector_enabled() -> bool:
+    from cnms_fom.config import get_settings
+
+    return bool(get_settings().pgvector_enabled)
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return  # SQLite has no vector type; the json column is the only shape.
     if not _has_vector_extension(bind):
         return  # No pgvector here. json is correct, and the flag should stay false.
+    if not _pgvector_enabled():
+        #  The ORM will map JSON, and a vector column cannot accept a json bind.
+        #  Converting here would leave a database that reads but cannot be written.
+        return
 
     udt = _embedding_udt(bind)
     if udt is None:
