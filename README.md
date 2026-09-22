@@ -230,12 +230,15 @@ backend/cnms_fom/
   knowledge/          knowledge cards: typed concept pages with a review gate
   research/           the evidence loop: briefs, claims, BO context, benchmark
   modalfit/           ModalFit co-refinements as measurement records
+  pysea/              electron microscopy through pySEA: FAIR signals, the
+                      ray-optics digital twin, multislice simulation
   bo_engine/          BoTorch loop over growth recipes
   cnms_integration/   instruments, experiments, run provenance  [placeholders]
   db/                 SQLAlchemy models, constraints, context identity
   ingest/             external materials-DB import (label parsing, staging)
   pilot/              HfO2-on-Si loop: stack export, XRR, property model
-  routers/            /materials /fom /rag /cards /research /modalfit /bo /pilot
+  routers/            /materials /fom /rag /cards /research /modalfit /pysea
+                      /bo /pilot
 migrations/           Alembic revisions
 frontend/             React + Vite + TypeScript — the original dashboard UI
 quark/                Quark, the chat interface — TanStack Start + Vite + Bun,
@@ -243,7 +246,7 @@ quark/                Quark, the chat interface — TanStack Start + Vite + Bun,
                       Separate app, separate toolchain; the two are not merged.
 docs/                 COSCIENTIST.md ← start here · FOM_PROTOCOL.md · DB_PROTOCOL.md
                       PILOT_WORKFLOW.md · RESEARCH_ASSISTANT.md · MODALFIT_INTEGRATION.md
-                      AUTORESEARCH_AUDIT.md
+                      AUTORESEARCH_AUDIT.md · PYSEA_INTEGRATION.md
 scripts/              example loader, external ingester, compliance checker
 .github/workflows/    CI: science on SQLite, migrations on Postgres, pilot loop
 ```
@@ -453,6 +456,34 @@ parameter is silent, not in disagreement, and collapsing those two turns a
 non-result into a finding.
 
 → `docs/MODALFIT_INTEGRATION.md`
+
+---
+
+## pySEA: electron microscopy
+
+pySEA (Walker, Pfeifer, Lupini, Hachtel, Pantelides, Hoglund, *M&M* 2026) runs from
+instrument configuration through scattering simulation to analysed signal. This
+platform runs from a determined property to a figure of merit to the next recipe.
+The two meet at a scalar with its measurement context attached.
+
+```bash
+python scripts/pysea_demo.py    # validate, import, plan, promote, compare — offline
+```
+
+A number reaches `property_values` as MEASURED only when the ray-optics twin
+reconstructed the column state, the collection semi-angle and the energy dispersion
+are recorded, and a person supplied the material identity. A multislice spectrum
+lands MODELED however closely it agrees with the measurement: `record_kind` decides
+the tier, not the caller and not the numbers.
+
+The comparison across platforms never averages. Two instruments that disagree about
+one film are two findings, and the mean of them is neither.
+
+**`pysea-canonical/0.1` is our contract, not pySEA's.** It was written from the
+published abstracts without sight of the container format, so every stored row
+carries its contract version and unmapped fields are kept rather than dropped.
+
+→ `docs/PYSEA_INTEGRATION.md`, which lists what must be confirmed with the pySEA team
 
 ---
 

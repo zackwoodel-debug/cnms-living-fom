@@ -1,0 +1,112 @@
+{
+  "contract_version": "pysea-canonical/0.1",
+  "record_id": "pysea-2026-0417-hfo2-veels-003",
+  "record_kind": "experimental",
+  "acquired_at": "2026-04-17T14:22:08+00:00",
+  "operator": "E. Hoglund",
+
+  "sample": {
+    "sample_id": "HFO2-SI-042",
+    "material_id": null,
+    "qr_id": "CNMS-QR-8831"
+  },
+  "proposal": { "proposal_id": "CNMS-2026-A-0094" },
+
+  "instrument": {
+    "instrument_id": "nion-hermes-01",
+    "name": "Nion HERMES monochromated STEM",
+    "technique": "momentum-resolved vEELS",
+    "manufacturer": "Nion",
+    "model": "HERMES-200"
+  },
+
+  "instrument_state": {
+    "beam_energy_kev": 60.0,
+    "camera_length_mm": 285.0,
+    "convergence_semi_angle_mrad": 1.8,
+    "collection_semi_angle_mrad": 2.4,
+    "lens_strengths": { "C1": 0.8421, "C2": 0.3310, "OL": 1.0442, "PL": 0.6127 },
+    "lens_strength_source": "twin",
+    "monochromated": true,
+    "aperture_um": 30.0,
+    "detector": "Dectris ELA direct electron detector",
+    "calibration_id": "cal-veels-2026-Q2",
+    "calibration_validity_window": ["2026-04-01T00:00:00+00:00", "2026-07-01T00:00:00+00:00"],
+    "twin_reconstructed": true,
+    "temperature_k": 298.0
+  },
+
+  "calibrations": {
+    "cal-veels-2026-Q2": {
+      "calibration_id": "cal-veels-2026-Q2",
+      "dispersion_ev_per_channel": 0.0021,
+      "energy_zero_channel": 512.0,
+      "camera_length_mm": 285.0,
+      "collection_angle_mrad": 2.4,
+      "convergence_angle_mrad": 1.8,
+      "source": "zero-loss peak fit against the ray-optics twin"
+    }
+  },
+
+  "signals": [
+    {
+      "signal_id": "veels-q-resolved",
+      "signal_type": "vEELS",
+      "shape": [64, 64, 1024],
+      "dtype": "float32",
+      "units": "counts",
+      "calibration_ref": "cal-veels-2026-Q2",
+      "axes": [
+        { "name": "qx", "kind": "momentum", "units": "1/angstrom", "size": 64, "offset": -0.42, "scale": 0.013125 },
+        { "name": "qy", "kind": "momentum", "units": "1/angstrom", "size": 64, "offset": -0.42, "scale": 0.013125 },
+        { "name": "energy_loss", "kind": "energy", "units": "eV", "size": 1024, "offset": -0.15, "scale": 0.0021 }
+      ],
+      "data_ref": { "scheme": "datafed", "record_id": "d/41772093", "uri": "datafed://d/41772093" }
+    },
+    {
+      "signal_id": "zlp-reference",
+      "signal_type": "EELS",
+      "shape": [1024],
+      "dtype": "float32",
+      "units": "counts",
+      "calibration_ref": "cal-veels-2026-Q2",
+      "axes": [
+        { "name": "energy_loss", "kind": "energy", "units": "eV", "size": 1024, "offset": -0.15, "scale": 0.0021 }
+      ],
+      "data_ref": { "scheme": "datafed", "record_id": "d/41772094" }
+    }
+  ],
+
+  "derived_scalars": [
+    {
+      "name": "high-frequency permittivity from the vibrational loss function",
+      "property_key": "eps_inf",
+      "value": 4.18,
+      "uncertainty": 0.09,
+      "units": "dimensionless",
+      "derivation": "fitted",
+      "source_signal_ids": ["veels-q-resolved", "zlp-reference"],
+      "method": "Kramers-Kronig analysis of the q-resolved loss function, ZLP removed by model fit",
+      "context": { "method": "momentum-resolved vEELS, Kramers-Kronig", "thickness_nm": 18.4 }
+    },
+    {
+      "name": "longitudinal optical phonon energy",
+      "property_key": null,
+      "value": 0.0731,
+      "uncertainty": 0.0008,
+      "units": "eV",
+      "derivation": "fitted",
+      "source_signal_ids": ["veels-q-resolved"],
+      "method": "Lorentzian fit to the LO branch at q -> 0"
+    }
+  ],
+
+  "software": [
+    { "name": "pySEA", "version": "0.4.1", "git_sha": "9f2c1ab", "configuration": "veels-kk-standard" }
+  ],
+  "datafed": {
+    "record_id": "d/41772093",
+    "collection_id": "c/cnms-hfo2-2026",
+    "uri": "datafed://c/cnms-hfo2-2026/d/41772093"
+  }
+}

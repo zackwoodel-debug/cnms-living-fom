@@ -62,6 +62,10 @@ from .enums import (
     FitTechnique,
     HypothesisOutcome,
     ProvenanceTier,
+    PySeaDerivation,
+    PySeaPromotionStatus,
+    PySeaRecordKind,
+    PySeaValidationStatus,
     ScoreStatus,
     SpecimenForm,
     SynthesisTechnique,
@@ -1910,6 +1914,205 @@ class LlmCacheEntry(Base, TimestampMixin):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<LlmCacheEntry {self.kind}/{self.model} {self.cache_key[:12]} hits={self.hit_count}>"
+
+
+# ---------------------------------------------------------------------------
+# pySEA: electron microscopy signals, instrument state, derived scalars
+# ---------------------------------------------------------------------------
+#
+#  These tables hold *metadata and references*, never bulk arrays. A 4D-STEM
+#  scan is gigabytes; the spectrum itself stays wherever pySEA and DataFed put
+#  it, and what lands here is the shape, the axes, the calibration and the
+#  locator needed to fetch it again. Postgres is being asked to answer "which
+#  records determine this quantity, under what microscope state", not to store
+#  the detector output.
+
+
+class PySeaRecord(Base, TimestampMixin):
+    """One pySEA container: an acquisition or a simulation, with its state.
+
+    The envelope this is built from is our own canonical form, not pySEA's
+    published schema, which we have not seen. ``contract_version`` records which
+    of our mappings produced the row so that a later re-read against the real
+    format can find and re-interpret everything written under a provisional one.
+    """
+
+    __tablename__ = "pysea_records"
+    __table_args__ = (
+        #  Re-importing the same container is a no-op, matching FitRecord.
+        UniqueConstraint("content_sha256", name="uq_pysea_record_content"),
+        Index("ix_pysea_records_record_id", "record_id"),
+        Index("ix_pysea_records_sample", "sample_id"),
+        Index("ix_pysea_records_datafed", "datafed_record_id"),
+        Index("ix_pysea_records_kind", "record_kind"),
+        #  A record calling itself a simulation must say what produced it.
+        #  Without this a simulated spectrum could arrive with no code, no
+        #  potential and no supercell, and still be indistinguishable in the
+        #  table from a measurement.
+        CheckConstraint(
+            "record_kind <> 'simulation' OR simulation IS NOT NULL",
+            name="ck_pysea_simulation_metadata_present",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    #  pySEA's own identifier for the acquisition, carried verbatim.
+    record_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    record_kind: Mapped[str] = mapped_column(
+        enum_column(PySeaRecordKind, "pysea_record_kind"), nullable=False
+    )
+
+    sample_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    #  Nullable on purpose. Material identity is composition + polymorph +
+    #  specimen form (Sec. 2.1), and a sample label carries none of that. It is
+    #  filled by whoever promotes, never by the importer.
+    material_id: Mapped[int | None] = mapped_column(
+        ForeignKey("materials.id", ondelete="SET NULL")
+    )
+    experiment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("experiments.id", ondelete="SET NULL")
+    )
+    instrument_id: Mapped[str | None] = mapped_column(String(64))
+    proposal_id: Mapped[str | None] = mapped_column(String(64))
+    operator: Mapped[str | None] = mapped_column(String(128))
+
+    datafed_record_id: Mapped[str | None] = mapped_column(String(128))
+    source_filename: Mapped[str | None] = mapped_column(String(512))
+    content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    #  The canonical envelope with bulk arrays stripped, so the row stays
+    #  self-describing after the source file moves.
+    raw_metadata: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    #  The digital-twin state as imported. Promotion reads this, so it is stored
+    #  whole rather than flattened into columns that would lose the parts we do
+    #  not yet know pySEA reports.
+    instrument_state: Mapped[dict | None] = mapped_column(JSONType)
+    calibrations: Mapped[dict | None] = mapped_column(JSONType)
+    simulation: Mapped[dict | None] = mapped_column(JSONType)
+    software: Mapped[list | None] = mapped_column(JSONType)
+
+    validation_status: Mapped[str] = mapped_column(
+        enum_column(PySeaValidationStatus, "pysea_validation_status"), nullable=False
+    )
+    #  Kept on the row rather than recomputed. The issues describe the container
+    #  as it arrived, and a later change to the validator must not silently
+    #  rewrite the history of what was accepted.
+    validation_issues: Mapped[list | None] = mapped_column(JSONType)
+
+    acquired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    signals: Mapped[list[PySeaSignalRow]] = relationship(
+        back_populates="record", cascade="all, delete-orphan", order_by="PySeaSignalRow.id"
+    )
+    scalars: Mapped[list[PySeaDerivedScalar]] = relationship(
+        back_populates="record", cascade="all, delete-orphan", order_by="PySeaDerivedScalar.id"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<PySeaRecord {self.record_id} {self.record_kind} sample={self.sample_id}>"
+
+
+class PySeaSignalRow(Base, TimestampMixin):
+    """One signal inside a pySEA record: its shape, axes and where the data is.
+
+    Named ``PySeaSignalRow`` because ``PySeaSignal`` is the parsed dataclass in
+    ``pysea.signal``. Two names for two things that would otherwise be confused
+    at every import site.
+    """
+
+    __tablename__ = "pysea_signals"
+    __table_args__ = (
+        UniqueConstraint("pysea_record_id", "signal_id", name="uq_pysea_signal_id"),
+        Index("ix_pysea_signals_record", "pysea_record_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pysea_record_id: Mapped[int] = mapped_column(
+        ForeignKey("pysea_records.id", ondelete="CASCADE"), nullable=False
+    )
+    signal_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    signal_type: Mapped[str | None] = mapped_column(String(64))
+    shape: Mapped[list] = mapped_column(JSONType, nullable=False)
+    dtype: Mapped[str | None] = mapped_column(String(32))
+    units: Mapped[str | None] = mapped_column(String(32))
+    axes: Mapped[list] = mapped_column(JSONType, nullable=False)
+    calibration: Mapped[dict | None] = mapped_column(JSONType)
+    #  Where the array actually lives: a DataFed id, a path, a URI. The array
+    #  itself is deliberately absent.
+    data_ref: Mapped[dict | None] = mapped_column(JSONType)
+
+    record: Mapped[PySeaRecord] = relationship(back_populates="signals")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<PySeaSignalRow {self.signal_id} {self.signal_type} shape={self.shape}>"
+
+
+class PySeaDerivedScalar(Base, TimestampMixin):
+    """A single number pySEA derived from one or more signals.
+
+    The only rows in this package that can become ``PropertyValue``. A scalar
+    arrives with its derivation and its source signals named, and it stays here
+    until someone supplies a material identity and the state gates pass.
+    """
+
+    __tablename__ = "pysea_derived_scalars"
+    __table_args__ = (
+        Index("ix_pysea_scalars_record", "pysea_record_id"),
+        Index("ix_pysea_scalars_property", "property_key"),
+        #  A promoted number without an uncertainty cannot be cross-checked
+        #  against a second determination, and comparison across platforms is
+        #  the point of this integration.
+        CheckConstraint(
+            "promotion_status <> 'promoted' OR uncertainty IS NOT NULL",
+            name="ck_pysea_promoted_has_uncertainty",
+        ),
+        #  Promotion must leave a pointer back to the row it created.
+        CheckConstraint(
+            "promotion_status <> 'promoted' OR promoted_property_value_id IS NOT NULL",
+            name="ck_pysea_promoted_links_value",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pysea_record_id: Mapped[int] = mapped_column(
+        ForeignKey("pysea_records.id", ondelete="CASCADE"), nullable=False
+    )
+
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    #  The registry key this maps onto, when it maps onto one. Null means the
+    #  quantity has no home in descriptors/registry.py yet, which is a reason to
+    #  refuse promotion rather than to invent a key.
+    property_key: Mapped[str | None] = mapped_column(String(64))
+    value: Mapped[float | None] = mapped_column(Float)
+    uncertainty: Mapped[float | None] = mapped_column(Float)
+    units: Mapped[str | None] = mapped_column(String(32))
+
+    derivation: Mapped[str] = mapped_column(
+        enum_column(PySeaDerivation, "pysea_derivation"), nullable=False
+    )
+    source_signal_ids: Mapped[list] = mapped_column(JSONType, nullable=False)
+    method: Mapped[str | None] = mapped_column(Text)
+    #  Measurement context the scalar carries on its own, merged with the
+    #  instrument state at promotion time.
+    context: Mapped[dict | None] = mapped_column(JSONType)
+
+    promotion_status: Mapped[str] = mapped_column(
+        enum_column(PySeaPromotionStatus, "pysea_promotion_status"),
+        nullable=False,
+        default=PySeaPromotionStatus.UNEXAMINED.value,
+    )
+    refusal_reasons: Mapped[list | None] = mapped_column(JSONType)
+    promoted_property_value_id: Mapped[int | None] = mapped_column(
+        ForeignKey("property_values.id", ondelete="SET NULL")
+    )
+
+    record: Mapped[PySeaRecord] = relationship(back_populates="scalars")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<PySeaDerivedScalar {self.name}={self.value} {self.promotion_status}>"
 
 
 #  Registered last, once every mapped class above exists.  Importing ``models``
