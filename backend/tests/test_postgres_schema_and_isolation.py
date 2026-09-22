@@ -12,6 +12,7 @@ cannot corrupt a real corpus.
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 
@@ -314,3 +315,475 @@ def test_the_lexical_leg_actually_runs_on_a_migrated_schema(pg_database, monkeyp
     finally:
         session.close()
         engine.dispose()
+
+
+#  ---------------------------------------------------------------------------
+#  Bug 21: PGVECTOR_ENABLED describes the schema; it does not change it.
+#  ---------------------------------------------------------------------------
+#
+#  Found by launching the server against a database migrated while pgvector was off
+#  and then turning the flag on. The ORM maps ``embedding`` as VECTOR(768) because
+#  ``embedding_column_type`` resolves the flag at import; Postgres still stores json.
+#
+#  What made it worth a named test is the size of the failure relative to how it
+#  reads. The first symptom was ``operator does not exist: json <=> unknown`` from
+#  the dense leg, which looks like "dense retrieval is unavailable, fall back". It is
+#  not: the portable path reads the same column, so pgvector's result parser raises
+#  ``'list' object has no attribute 'split'`` on *every* chunk row. Retrieval is down,
+#  the traceback names a third-party file, and nothing points at the setting.
+#
+#  These tests are Postgres-only by nature. SQLite has no vector type, so the
+#  disagreement this guards against cannot be constructed there.
+
+
+def _make_embedding_json(url: str) -> None:
+    """Put the schema in the state a pre-pgvector migration leaves it in."""
+    engine = create_engine(url, future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE document_chunks ALTER COLUMN embedding TYPE json "
+                #  ::text::json, not to_json(::text): the latter stores the JSON
+                #  string '"[0.1,0.2]"' and turns every embedding into text.
+                "USING embedding::text::json"
+            )
+        )
+    engine.dispose()
+
+
+def test_a_json_embedding_column_under_the_pgvector_flag_is_reported(
+    pg_database, monkeypatch
+):
+    """The mismatch names the flag, not pgvector's parser."""
+    from cnms_fom.rag_backend import vectorstore
+
+    engine = create_engine(pg_database, future=True)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    _make_embedding_json(pg_database)
+
+    #  Assert against the flag directly rather than the ambient environment, so the
+    #  test states the same thing whether or not the suite runs with pgvector on.
+    monkeypatch.setattr(
+        vectorstore.get_settings(), "pgvector_enabled", True, raising=False
+    )
+    vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+    engine = create_engine(pg_database, future=True)
+    try:
+        message = vectorstore.embedding_storage_mismatch(engine)
+        assert message is not None, (
+            "A json column under the pgvector flag went unreported. Every chunk read "
+            "fails in this state; a silent probe means the operator learns about it "
+            "from a pgvector traceback."
+        )
+        #  The message has to name the lever. "type mismatch" sends someone into the
+        #  ORM; PGVECTOR_ENABLED sends them to the thing they can actually change.
+        assert "PGVECTOR_ENABLED" in message
+        assert "json" in message
+    finally:
+        engine.dispose()
+        vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+
+def test_a_matching_vector_column_is_not_reported_as_a_mismatch(
+    pg_database, monkeypatch
+):
+    """The guard must not refuse the configuration it exists to protect."""
+    from cnms_fom.rag_backend import vectorstore
+
+    engine = create_engine(pg_database, future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.execute(
+            text(
+                "CREATE TABLE document_chunks (id serial PRIMARY KEY, "
+                "embedding vector(768))"
+            )
+        )
+    engine.dispose()
+
+    monkeypatch.setattr(
+        vectorstore.get_settings(), "pgvector_enabled", True, raising=False
+    )
+    vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+    engine = create_engine(pg_database, future=True)
+    try:
+        assert vectorstore.embedding_storage_mismatch(engine) is None, (
+            "A real vector column was reported as a mismatch, which would take "
+            "retrieval down on a correctly configured deployment."
+        )
+    finally:
+        engine.dispose()
+        vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+
+def test_the_flag_off_over_a_json_column_is_the_working_configuration(
+    pg_database, monkeypatch
+):
+    """The pairing every migrated deployment has. It must not be reported."""
+    from cnms_fom.rag_backend import vectorstore
+
+    engine = create_engine(pg_database, future=True)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    _make_embedding_json(pg_database)
+
+    monkeypatch.setattr(
+        vectorstore.get_settings(), "pgvector_enabled", False, raising=False
+    )
+    vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+    engine = create_engine(pg_database, future=True)
+    try:
+        assert vectorstore.embedding_storage_mismatch(engine) is None
+    finally:
+        engine.dispose()
+        vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+
+def test_search_chunks_refuses_legibly_rather_than_failing_inside_pgvector(
+    pg_database, monkeypatch
+):
+    """``search_chunks`` raises a named error before it loads a single row.
+
+    The value here is the exception *type*. An ``AttributeError`` from
+    ``pgvector/vector.py`` is indistinguishable from a library bug, so the operator
+    debugs pgvector instead of reading their own configuration.
+    """
+    from cnms_fom.rag_backend import vectorstore
+    from cnms_fom.rag_backend.vectorstore import EmbeddingStorageMismatch, search_chunks
+
+    engine = create_engine(pg_database, future=True)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    _make_embedding_json(pg_database)
+
+    monkeypatch.setattr(
+        vectorstore.get_settings(), "pgvector_enabled", True, raising=False
+    )
+    vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+    engine = create_engine(pg_database, future=True)
+    session = sessionmaker(bind=engine, future=True)()
+    try:
+        with pytest.raises(EmbeddingStorageMismatch) as caught:
+            search_chunks(session, [0.1] * 768, k=4)
+        assert "PGVECTOR_ENABLED" in str(caught.value)
+    finally:
+        session.close()
+        engine.dispose()
+        vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+
+def test_the_vector_check_is_not_cached_across_engines(pg_database):
+    """Two engines, two databases, two answers.
+
+    The cache was keyed on ``id(engine)``. CPython reuses an id once the object is
+    collected, so a disposed engine's answer could be served to a new engine pointing
+    somewhere else — a cache hit that reports the wrong database's schema. Keyed on
+    the engine object, the entry dies with it.
+    """
+    from cnms_fom.rag_backend import vectorstore
+
+    engine = create_engine(pg_database, future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.execute(
+            text("CREATE TABLE document_chunks (id serial PRIMARY KEY, embedding vector(768))")
+        )
+    vectorstore._EMBEDDING_IS_VECTOR.clear()
+    assert vectorstore._embedding_is_vector(engine) is True
+    engine.dispose()
+    del engine
+
+    import gc
+
+    gc.collect()
+
+    #  A second engine on a database whose column is json must answer False even if
+    #  the allocator handed it the first engine's address.
+    other = create_engine(pg_database, future=True)
+    with other.begin() as conn:
+        conn.execute(text("DROP TABLE document_chunks"))
+        conn.execute(text("CREATE TABLE document_chunks (id serial PRIMARY KEY, embedding json)"))
+    try:
+        assert vectorstore._embedding_is_vector(other) is False, (
+            "A stale cache entry answered for a different engine."
+        )
+    finally:
+        other.dispose()
+        vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+
+def test_the_flag_off_over_a_vector_column_is_reported_too(pg_database, monkeypatch):
+    """The quiet half of the disagreement, and the reason the probe is symmetric.
+
+    A JSON-mapped ORM reads a vector column back as the string ``'[0.1,0.2,...]'``.
+    ``_rank_in_python`` raises on ``np.asarray(..., dtype=float)``, ``hybrid_search``
+    drops the dense leg as an optional retriever, and every answer afterwards comes
+    from lexical search alone with nothing said. Unlike the flag-on case there is no
+    crash to notice, so only this check stands between that and a silent corpus-wide
+    quality regression.
+    """
+    from cnms_fom.rag_backend import vectorstore
+
+    engine = create_engine(pg_database, future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.execute(
+            text("CREATE TABLE document_chunks (id serial PRIMARY KEY, embedding vector(768))")
+        )
+    engine.dispose()
+
+    monkeypatch.setattr(
+        vectorstore.get_settings(), "pgvector_enabled", False, raising=False
+    )
+    vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+    engine = create_engine(pg_database, future=True)
+    try:
+        message = vectorstore.embedding_storage_mismatch(engine)
+        assert message is not None, (
+            "A vector column under a JSON mapping went unreported. Dense retrieval is "
+            "silently dead in this state."
+        )
+        assert "PGVECTOR_ENABLED" in message
+        #  The message must say the failure is silent, because nothing else will.
+        assert "silent" in message.lower() or "lexical" in message.lower()
+    finally:
+        engine.dispose()
+        vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+
+def test_a_json_mapped_orm_really_does_read_a_vector_column_as_a_string(pg_database):
+    """The premise of the test above, checked against Postgres rather than assumed.
+
+    This started as an assumption that JSON-over-vector was harmless ("it reads it as
+    text, nothing is lost"). It is not: the value arrives as ``str`` and every numeric
+    consumer downstream fails. Pinned here so the symmetric probe cannot be argued
+    away later on the strength of the same wrong intuition.
+    """
+    from sqlalchemy import JSON, Column, Integer
+    from sqlalchemy.orm import declarative_base
+
+    engine = create_engine(pg_database, future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.execute(text("CREATE TABLE probe (id serial PRIMARY KEY, embedding vector(3))"))
+        conn.execute(text("INSERT INTO probe (embedding) VALUES ('[0.1,0.2,0.3]')"))
+
+    LocalBase = declarative_base()
+
+    class Probe(LocalBase):
+        __tablename__ = "probe"
+        id = Column(Integer, primary_key=True)
+        embedding = Column(JSON)  # exactly what the flag-off mapping produces
+
+    try:
+        with sessionmaker(bind=engine, future=True)() as session:
+            value = session.query(Probe).one().embedding
+        assert isinstance(value, str), (
+            f"Expected a str from a JSON-mapped vector column, got {type(value).__name__}. "
+            "If this ever returns a list, the flag-off half of the mismatch is harmless "
+            "and the probe can be narrowed."
+        )
+    finally:
+        engine.dispose()
+
+
+#  ---------------------------------------------------------------------------
+#  Migration 0009: the conversion the error message points at.
+#  ---------------------------------------------------------------------------
+
+
+def test_migration_0009_converts_the_column_and_preserves_every_value(
+    pg_database, monkeypatch
+):
+    """Up, down, up — with the embeddings read back and compared each time.
+
+    A conversion that lost precision or reordered components would leave retrieval
+    working and every cosine similarity subtly wrong, which no schema assertion
+    catches. So the values are compared, not just the column type.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    from cnms_fom.config import get_settings
+
+    monkeypatch.setenv("DATABASE_URL", pg_database)
+    get_settings.cache_clear()
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", pg_database.replace("%", "%%"))
+    command.upgrade(config, "0008")
+
+    dim = int(get_settings().embedding_dim)
+    #  Values chosen to catch both precision loss and reordering: a descending ramp
+    #  with enough decimal places that a float32 round trip is visible.
+    original = [round(1.0 - i / dim, 6) for i in range(dim)]
+
+    engine = create_engine(pg_database, future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO documents (id, title, filename, content_sha256, technique) "
+                "VALUES (1, 'probe', 'probe.pdf', 'probe-sha', 'ald')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO document_chunks (document_id, chunk_index, text, embedding) "
+                "VALUES (1, 0, 'probe', CAST(:e AS json))"
+            ),
+            {"e": json.dumps(original)},
+        )
+    engine.dispose()
+
+    def _embedding_as_floats() -> list[float]:
+        eng = create_engine(pg_database, future=True)
+        try:
+            with eng.connect() as conn:
+                #  Read as text and parse here, so this does not depend on which
+                #  type the driver maps the column to at any point in the round trip.
+                raw = conn.execute(
+                    text("SELECT embedding::text FROM document_chunks WHERE chunk_index = 0")
+                ).scalar_one()
+        finally:
+            eng.dispose()
+        return [float(part) for part in raw.strip("[]").split(",")]
+
+    def _udt() -> str:
+        eng = create_engine(pg_database, future=True)
+        try:
+            with eng.connect() as conn:
+                return conn.execute(
+                    text(
+                        "SELECT udt_name FROM information_schema.columns "
+                        "WHERE table_name = 'document_chunks' AND column_name = 'embedding'"
+                    )
+                ).scalar_one()
+        finally:
+            eng.dispose()
+
+    command.upgrade(config, "0009")
+    assert _udt() == "vector", (
+        "0009 left the column as json on a database with the vector extension, so "
+        "PGVECTOR_ENABLED=true stays unusable — the bug it exists to fix."
+    )
+    after_up = _embedding_as_floats()
+
+    command.downgrade(config, "0008")
+    assert _udt() == "json"
+    after_down = _embedding_as_floats()
+
+    command.upgrade(config, "0009")
+    assert _udt() == "vector"
+    after_up_again = _embedding_as_floats()
+
+    #  pgvector stores float32, so the round trip is not bit-exact against the
+    #  float64 literals inserted. Asserting exact equality here would be asserting
+    #  something untrue; 1e-6 is tighter than any similarity this feeds.
+    for label, got in (
+        ("after upgrade", after_up),
+        ("after downgrade", after_down),
+        ("after re-upgrade", after_up_again),
+    ):
+        assert len(got) == dim, f"{label}: {len(got)} components, expected {dim}"
+        worst = max(abs(a - b) for a, b in zip(original, got, strict=True))
+        assert worst < 1e-6, f"{label}: embeddings drifted by {worst}"
+
+    engine = create_engine(pg_database, future=True)
+    try:
+        with engine.connect() as conn:
+            assert conn.execute(
+                text("SELECT 1 FROM pg_indexes WHERE indexname = 'ix_chunk_embedding_hnsw'")
+            ).first(), "No HNSW index after 0009: the vector column is being scanned."
+    finally:
+        engine.dispose()
+        get_settings.cache_clear()
+
+
+def test_migration_0009_refuses_rather_than_discarding_mismatched_embeddings(
+    pg_database, monkeypatch
+):
+    """An embedding of the wrong width is a corpus problem, not a cast problem.
+
+    Nulling the offending rows would make the migration succeed and silently delete
+    part of the corpus, which is the shape of mistake the no-imputation rule exists to
+    prevent. The refusal has to name the count so the operator can size the problem.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    from cnms_fom.config import get_settings
+
+    #  Everything up to 0009, then a row the cast cannot take.
+    monkeypatch.setenv("DATABASE_URL", pg_database)
+    get_settings.cache_clear()
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", pg_database.replace("%", "%%"))
+    command.upgrade(config, "0008")
+
+    engine = create_engine(pg_database, future=True)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO documents (id, title, filename, content_sha256, technique) "
+                "VALUES (1, 'probe', 'probe.pdf', 'probe-sha', 'ald') "
+                "ON CONFLICT DO NOTHING"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO document_chunks (document_id, chunk_index, text, embedding) "
+                "VALUES (1, 0, 'probe', '[0.1, 0.2, 0.3]'::json)"
+            )
+        )
+    engine.dispose()
+
+    with pytest.raises(RuntimeError) as caught:
+        command.upgrade(config, "0009")
+    message = str(caught.value)
+    assert "1 of the stored embeddings" in message, message
+    #  It must say what to do, not only that it stopped.
+    assert "re-embed" in message.lower()
+    get_settings.cache_clear()
+
+
+def test_a_vector_column_under_a_json_mapping_degrades_rather_than_raising(
+    pg_database, monkeypatch
+):
+    """The severity split, asserted rather than left to a comment.
+
+    Flag-off-over-vector is reported but must not raise: lexical retrieval works, and
+    taking a partly working deployment down over a setting is a worse trade than
+    serving results that announce themselves as degraded. The flag-on case raises
+    because there nothing works at all — the test above covers that side.
+    """
+    from cnms_fom.rag_backend import vectorstore
+
+    engine = create_engine(pg_database, future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        conn.execute(
+            text("CREATE TABLE document_chunks (id serial PRIMARY KEY, embedding vector(768))")
+        )
+    engine.dispose()
+
+    monkeypatch.setattr(
+        vectorstore.get_settings(), "pgvector_enabled", False, raising=False
+    )
+    vectorstore._EMBEDDING_IS_VECTOR.clear()
+
+    engine = create_engine(pg_database, future=True)
+    session = sessionmaker(bind=engine, future=True)()
+    try:
+        #  Reported...
+        assert vectorstore.embedding_storage_mismatch(engine) is not None
+        #  ...but not fatal.
+        vectorstore.assert_embedding_storage_matches(session)
+    finally:
+        session.close()
+        engine.dispose()
+        vectorstore._EMBEDDING_IS_VECTOR.clear()

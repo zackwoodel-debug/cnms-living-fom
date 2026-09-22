@@ -100,8 +100,25 @@ def ready() -> dict:
     except Exception as exc:  # noqa: BLE001
         checks["retrieval"] = {"ok": False, "error": str(exc)}
 
+    #  A config flag that disagrees with the schema takes retrieval down completely,
+    #  and the failure it produces on its own names pgvector rather than the flag.
+    try:
+        from cnms_fom.db.base import get_engine as _engine_for_embedding
+        from cnms_fom.rag_backend.vectorstore import embedding_storage_mismatch
+
+        mismatch = embedding_storage_mismatch(_engine_for_embedding())
+        if mismatch:
+            checks.setdefault("retrieval", {})["ok"] = False
+            checks["retrieval"]["embedding_storage_mismatch"] = mismatch
+    except Exception:  # noqa: BLE001 - a check that cannot run reports nothing
+        pass
+
     return {
-        "status": "ok" if checks["database"]["ok"] else "degraded",
+        "status": (
+            "ok"
+            if checks["database"]["ok"] and checks.get("retrieval", {}).get("ok", True)
+            else "degraded"
+        ),
         "version": __version__,
         "checks": checks,
     }

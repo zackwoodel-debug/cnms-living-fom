@@ -1565,6 +1565,80 @@ same trade at two different strengths — `grade-v3` mild enough to keep on by d
 
 ---
 
+## 10i. Bug 21: `PGVECTOR_ENABLED` described a schema no migration produced
+
+Found by launching the server against the real database with the flag turned on. The
+first symptom read like a missing capability:
+
+```
+operator does not exist: json <=> unknown
+```
+
+That looks like "pgvector is not available here, fall back to the portable path", and
+it is not. Three separate defects sat behind it, and each was only visible once the
+one in front of it was fixed.
+
+**The flag never matched the schema, anywhere.** `db/base.embedding_column_type()`
+picks the ORM type at *import* time from `PGVECTOR_ENABLED`, while migration 0001
+creates `document_chunks.embedding` as `sa.JSON()` unconditionally. No migration ever
+converted it. So the vector column existed only where the tables were built by
+`Base.metadata.create_all` with the flag already set — which is the test suite and
+nothing else. `PGVECTOR_ENABLED=true` was unusable on **every** Alembic-migrated
+database. Migration 0002's HNSW index had been silently skipping itself since it was
+written, for exactly this reason: it checks `udt_name = 'vector'` and gives up.
+
+**The failure was total, not partial.** The portable path reads the same column, so
+once the ORM maps `Vector` over json, pgvector's result processor raises
+`'list' object has no attribute 'split'` on *every* chunk row — the lexical leg's
+rows included. Retrieval was down, and the traceback named `pgvector/vector.py`
+rather than the setting responsible. `_pgvector_available()` checking the dialect (bug
+19) was necessary but not sufficient: it stopped the `<=>` operator being sent and
+left every read still broken.
+
+**The disagreement is symmetric, and the other half is the dangerous one.** The first
+fix asserted that flag-off-over-vector was harmless — "JSON reads a vector column as
+text, nothing is lost". Measured against Postgres, that is false: the value arrives as
+the *string* `'[0.1,0.2,...]'`, `_rank_in_python` raises on
+`np.asarray(..., dtype=float)`, `hybrid_search` drops the dense leg as an optional
+retriever, and the system serves lexical-only results indefinitely with nothing said.
+There is no crash to notice. That premise is now pinned by
+`test_a_json_mapped_orm_really_does_read_a_vector_column_as_a_string`, so the
+symmetric check cannot be argued away later on the strength of the same wrong
+intuition.
+
+### What changed
+
+| Change | Why |
+|---|---|
+| Migration 0009 converts `embedding` to `vector(EMBEDDING_DIM)` and builds the HNSW index | Makes the flag mean something. Conditional on the **extension** being present, never on the flag: a schema that depends on a runtime setting is how the divergence happened. |
+| `embedding_storage_mismatch()` reports either direction | Startup logs it and `/health/ready` reports `retrieval.ok: false`, which is how this codebase surfaces a bad environment. |
+| `assert_embedding_storage_matches()` raises only for flag-on-json | There nothing works, and a search that could not run must not report an empty corpus. Flag-off-vector degrades instead: lexical works, and taking a partly working deployment down over a setting is the worse trade. |
+| `_embedding_is_vector()` asks `information_schema.udt_name` | SQLAlchemy reflection maps `vector` to `NullType` and warns "Did not recognize type 'vector'" unless pgvector registered itself first, so a type-name comparison on the reflected column reads a **real** vector column as "not a vector". The first version of this check did exactly that, which would have reported a mismatch on a correctly configured deployment and taken retrieval down to protect it from nothing. Caught by the test, not by review. |
+| The per-engine cache keys on the engine object, weakly | It keyed on `id(engine)`. CPython reuses an id once the object is collected, so a disposed engine's answer could be served to a new engine pointing at a different database. |
+
+Migration 0009 refuses rather than repairing when an embedding's width disagrees with
+`EMBEDDING_DIM`, and names the count. Nulling those rows would make the cast succeed
+and delete part of the corpus inside a schema change; re-embedding is a decision about
+the corpus.
+
+### Two things this says about the method
+
+The reflection bug and the symmetry bug were both introduced *by the fix* and caught
+by tests written before the fix was believed. Neither would have survived review,
+because both read as obviously correct — `type(col).__name__ == "vector"` and "JSON
+holds anything" are the intuitive answers. The Postgres-only test file earns its
+keep here for the third time: none of this is constructible on SQLite, which has no
+vector type at all.
+
+The value-preserving round trip is checked by comparing the embeddings through
+up → down → up, not by asserting the column type. A conversion that lost precision or
+reordered components would leave retrieval working and every cosine similarity subtly
+wrong, and no schema assertion would notice. Verified falsifiable: reintroducing
+`to_json(embedding::text)` in the downgrade — which stores the JSON string
+`'"[0.1,0.2]"'` instead of an array — fails the test.
+
+---
+
 ## 11. Known limitations and deferred work
 
 **Measured, and significant:**
