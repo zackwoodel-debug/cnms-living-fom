@@ -55,7 +55,7 @@ from dataclasses import dataclass
 
 from cnms_fom.db.enums import SynthesisTechnique
 
-from .vectorstore import ChunkHit, search_chunks
+from .vectorstore import ChunkHit, assert_embedding_storage_matches, search_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -532,6 +532,13 @@ def hybrid_search(
     rare token is worth returning whatever a vector thinks of it — that being
     the reason lexical search is in the pipeline.
     """
+    #  Before either leg. A json embedding column under the pgvector flag breaks
+    #  every read of a chunk, so the lexical fallback cannot cover for the dense leg
+    #  here the way it covers for an unreachable Ollama: both legs load the same
+    #  rows. Raising matches the rule the rest of this module is built on — a search
+    #  that could not run must not report an empty corpus.
+    assert_embedding_storage_matches(session)
+
     lists: dict[str, list[ChunkHit]] = {}
     dense_failure: Exception | None = None
 
