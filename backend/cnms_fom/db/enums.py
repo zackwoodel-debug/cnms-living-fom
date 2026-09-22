@@ -269,3 +269,65 @@ class StatementKind(str, Enum):
     EVIDENCE = "evidence"              # traceable to a record or a cited passage
     INTERPRETATION = "interpretation"  # a reading of that evidence
     PROPOSAL = "proposal"              # a suggested action, resting on the above
+
+
+class PySeaRecordKind(str, Enum):
+    """Whether a pySEA record came off an instrument or out of a simulation.
+
+    Closed vocabulary, and never inferred. A multislice spectrum and a measured
+    one can look identical once they are both arrays of counts against energy
+    loss; the difference lives in this field and nowhere else, and promotion
+    reads it to decide which provenance tier a derived number may claim.
+    """
+
+    EXPERIMENTAL = "experimental"
+    SIMULATION = "simulation"
+    #  One envelope carrying both, such as a measured spectrum shipped with the
+    #  simulation it is being compared against. Treated as SIMULATION for tier
+    #  purposes: the safe reading of a mixed record is the weaker one.
+    HYBRID = "hybrid"
+
+
+class PySeaAxisKind(str, Enum):
+    """What a signal axis indexes.
+
+    MOMENTUM is listed because momentum-resolved vEELS is the case this
+    integration exists for; an energy-loss spectrum resolved along q is a
+    three-axis signal, and collapsing q into "other" would lose the axis that
+    makes the measurement a dispersion rather than a spectrum.
+    """
+
+    SPATIAL = "spatial"
+    ENERGY = "energy"
+    MOMENTUM = "momentum"
+    TIME = "time"
+    OTHER = "other"
+
+
+class PySeaDerivation(str, Enum):
+    """How a scalar was obtained from its source signals.
+
+    Separate from :class:`ProvenanceTier`. Derivation describes the arithmetic,
+    the tier describes what the platform is allowed to claim. A fitted number
+    from an experimental record is MEASURED; the same fit applied to a simulated
+    spectrum is MODELED, and only the record kind decides that.
+    """
+
+    MEASURED = "measured"
+    FITTED = "fitted"
+    CALCULATED = "calculated"
+    SIMULATED = "simulated"
+
+
+class PySeaValidationStatus(str, Enum):
+    VALID = "valid"
+    INVALID = "invalid"
+
+
+class PySeaPromotionStatus(str, Enum):
+    """Where a derived scalar sits on the path into the analysis tables."""
+
+    UNEXAMINED = "unexamined"
+    ELIGIBLE = "eligible"
+    REFUSED = "refused"
+    PROMOTED = "promoted"

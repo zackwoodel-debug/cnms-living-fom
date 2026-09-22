@@ -21,6 +21,7 @@ from cnms_fom.routers import (
     materials,
     modalfit,
     pilot,
+    pysea,
     rag,
     research,
 )
@@ -117,6 +118,16 @@ app = FastAPI(
             "description": "Multi-technique co-refinements (SE/SPR/QCM/XRR/NR) as measurement "
             "records, and cross-technique agreement.",
         },
+        {
+            "name": "pysea",
+            "description": (
+                "Electron microscopy through the pySEA ecosystem: FAIR signals, the "
+                "ray-optics digital twin, and multislice simulation. A derived scalar "
+                "becomes a property value only when the twin reconstructed the column "
+                "state and a person supplied the material identity; a simulated one "
+                "lands MODELED whatever it agrees with."
+            ),
+        },
         {"name": "bo", "description": "Bayesian optimization over growth recipes."},
         {"name": "pilot", "description": "The HfO2-on-Si worked example, end to end."},
     ],
@@ -136,6 +147,7 @@ app.include_router(materials.router)
 app.include_router(fom.router)
 app.include_router(rag.router)
 app.include_router(modalfit.router)
+app.include_router(pysea.router)
 app.include_router(cards.router)
 app.include_router(research.router)
 app.include_router(bo.router)

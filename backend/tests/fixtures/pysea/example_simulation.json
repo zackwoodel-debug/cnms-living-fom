@@ -1,0 +1,86 @@
+{
+  "contract_version": "pysea-canonical/0.1",
+  "record_id": "pysea-sim-2026-0419-hfo2-tacaw-011",
+  "record_kind": "simulation",
+  "acquired_at": "2026-04-19T09:05:00+00:00",
+  "operator": "J. Walker",
+
+  "sample": { "sample_id": "HFO2-SI-042", "material_id": null, "qr_id": null },
+  "proposal": { "proposal_id": "CNMS-2026-A-0094" },
+
+  "instrument": {
+    "instrument_id": "nion-hermes-01",
+    "name": "Digital twin of the Nion HERMES",
+    "technique": "simulated momentum-resolved vEELS",
+    "manufacturer": "Nion",
+    "model": "HERMES-200"
+  },
+
+  "instrument_state": {
+    "beam_energy_kev": 60.0,
+    "camera_length_mm": 285.0,
+    "convergence_semi_angle_mrad": 1.8,
+    "collection_semi_angle_mrad": 2.4,
+    "lens_strengths": { "C1": 0.8421, "C2": 0.3310, "OL": 1.0442, "PL": 0.6127 },
+    "lens_strength_source": "twin",
+    "monochromated": true,
+    "aperture_um": 30.0,
+    "detector": "simulated ideal detector",
+    "dispersion_ev_per_channel": 0.0021,
+    "calibration_id": "cal-veels-2026-Q2",
+    "calibration_validity_window": ["2026-04-01T00:00:00+00:00", "2026-07-01T00:00:00+00:00"],
+    "twin_reconstructed": true,
+    "temperature_k": 300.0
+  },
+
+  "simulation": {
+    "code": "pySEA multislice",
+    "version": "0.4.1",
+    "method": "TACAW",
+    "interatomic_potential": "MACE-MP-0 fine-tuned on HfO2",
+    "molecular_dynamics": {
+      "ensemble": "NVT",
+      "temperature_k": 300.0,
+      "timestep_fs": 0.5,
+      "n_steps": 40000
+    },
+    "supercell": { "formula": "Hf96O192", "a_ang": 20.6, "b_ang": 20.8, "c_ang": 21.1 },
+    "slice_thickness_ang": 1.8,
+    "n_frozen_phonon_configurations": 24
+  },
+
+  "signals": [
+    {
+      "signal_id": "sim-veels-q-resolved",
+      "signal_type": "vEELS",
+      "shape": [64, 64, 1024],
+      "dtype": "float32",
+      "units": "arbitrary",
+      "axes": [
+        { "name": "qx", "kind": "momentum", "units": "1/angstrom", "size": 64, "offset": -0.42, "scale": 0.013125 },
+        { "name": "qy", "kind": "momentum", "units": "1/angstrom", "size": 64, "offset": -0.42, "scale": 0.013125 },
+        { "name": "energy_loss", "kind": "energy", "units": "eV", "size": 1024, "offset": -0.15, "scale": 0.0021 }
+      ],
+      "data_ref": { "scheme": "datafed", "record_id": "d/41772551" }
+    }
+  ],
+
+  "derived_scalars": [
+    {
+      "name": "high-frequency permittivity from the simulated loss function",
+      "property_key": "eps_inf",
+      "value": 4.02,
+      "uncertainty": 0.05,
+      "units": "dimensionless",
+      "derivation": "simulated",
+      "source_signal_ids": ["sim-veels-q-resolved"],
+      "method": "Kramers-Kronig analysis of the TACAW loss function over 24 frozen-phonon configurations",
+      "context": { "method": "TACAW multislice, MACE-MP-0 potential", "thickness_nm": 18.4 }
+    }
+  ],
+
+  "software": [
+    { "name": "pySEA", "version": "0.4.1", "git_sha": "9f2c1ab", "configuration": "tacaw-mlip" }
+  ],
+  "datafed": { "record_id": "d/41772551", "collection_id": "c/cnms-hfo2-2026", "uri": "datafed://d/41772551" }
+}

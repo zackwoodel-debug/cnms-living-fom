@@ -1,0 +1,48 @@
+{
+  "contract_version": "pysea-canonical/0.1",
+  "record_id": "pysea-2026-0420-broken-001",
+  "record_kind": "experimental",
+
+  "sample": { "sample_id": "HFO2-SI-099" },
+
+  "instrument": { "instrument_id": "nion-hermes-01" },
+
+  "instrument_state": {
+    "beam_energy_kev": 60.0,
+    "convergence_semi_angle_mrad": 9.5,
+    "collection_semi_angle_mrad": 2.4,
+    "lens_strengths": { "C1": 0.84 },
+    "lens_strength_source": "nominal",
+    "twin_reconstructed": false
+  },
+
+  "signals": [
+    {
+      "signal_id": "broken-veels",
+      "signal_type": "vEELS",
+      "shape": [64, 64, 1024],
+      "dtype": "float32",
+      "axes": [
+        { "name": "qx", "kind": "momentum", "size": 64 },
+        { "name": "energy_loss", "kind": "energy", "units": "eV", "size": 999 }
+      ]
+    }
+  ],
+
+  "derived_scalars": [
+    {
+      "name": "permittivity from nothing in particular",
+      "property_key": "eps_inf",
+      "value": 3.9,
+      "derivation": "fitted",
+      "source_signal_ids": []
+    },
+    {
+      "name": "orphan scalar",
+      "value": 12.0,
+      "units": "eV",
+      "derivation": "guessed",
+      "source_signal_ids": ["a-signal-that-does-not-exist"]
+    }
+  ]
+}
