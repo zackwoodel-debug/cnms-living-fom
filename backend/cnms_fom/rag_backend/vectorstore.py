@@ -18,6 +18,7 @@ import weakref
 from dataclasses import dataclass
 
 import numpy as np
+from sqlalchemy import or_
 
 from cnms_fom.config import get_settings
 from cnms_fom.db.enums import SynthesisTechnique
@@ -271,6 +272,7 @@ def search_chunks(
     k: int = 6,
     techniques: list[SynthesisTechnique] | None = None,
     min_similarity: float = 0.0,
+    embedding_model: str | None = None,
 ) -> list[ChunkHit]:
     """Return the ``k`` most similar chunks, highest cosine similarity first.
 
@@ -289,6 +291,18 @@ def search_chunks(
     )
     if techniques:
         query = query.filter(Document.technique.in_(list(techniques)))
+
+    #  Compare only vectors that live in the same space. Two embedding models
+    #  produce coordinates in unrelated bases, so a cosine similarity between them
+    #  is not a weak signal — it is a number with no meaning, and `nomic-embed-text`
+    #  shares its 768 dimensions with plenty of other models, so the shape check in
+    #  `_rank_in_python` cannot catch the mix. A NULL model is included because it
+    #  predates the labelling and excluding it would silently drop an older corpus;
+    #  `corpus_stats` reports the breakdown so a mix is visible rather than assumed.
+    model = embedding_model or get_settings().ollama_embed_model
+    query = query.filter(
+        or_(DocumentChunk.embedding_model == model, DocumentChunk.embedding_model.is_(None))
+    )
 
     if _pgvector_available(session):
         #  pgvector's cosine_distance is 1 - cosine_similarity.
@@ -328,17 +342,33 @@ def _rank_in_python(rows, query_vector: list[float], k: int) -> list[ChunkHit]:
         return []
 
     scored: list[tuple[float, object, object]] = []
+    skipped_dim = 0
     for chunk, document in rows:
         if chunk.embedding is None:
             continue
         v = np.asarray(chunk.embedding, dtype=float)
         if v.shape != q.shape:
-            #  A chunk embedded with a different model. Skip rather than compare.
+            #  A different embedding width. Skipping is right — the vectors are not
+            #  comparable — but doing it silently is how a changed EMBEDDING_DIM
+            #  turns into a corpus that answers from a shrinking subset of itself
+            #  while every metric still looks healthy. Counted and reported below.
+            skipped_dim += 1
             continue
         v_norm = float(np.linalg.norm(v))
         if v_norm == 0.0:
             continue
         scored.append((float(q @ v) / (q_norm * v_norm), chunk, document))
+
+    if skipped_dim:
+        logger.warning(
+            "Skipped %d of %d chunks whose embedding width is not %d: they cannot be "
+            "compared against this query vector. Retrieval is searching part of the "
+            "corpus. Re-embed those chunks, or point EMBEDDING_DIM at the model that "
+            "produced them.",
+            skipped_dim,
+            len(rows),
+            q.shape[0],
+        )
 
     scored.sort(key=lambda item: item[0], reverse=True)
     return [_to_hit(c, d, similarity=s) for s, c, d in scored[:k]]
@@ -362,10 +392,25 @@ def corpus_stats(session) -> dict:
         .scalar()
         or 0
     )
+    #  One row per embedding model present. A corpus holding two is a corpus whose
+    #  similarities are only meaningful within each group, and nothing else in the
+    #  system was reporting it.
+    by_model = (
+        session.query(DocumentChunk.embedding_model, func.count(DocumentChunk.id))
+        .filter(DocumentChunk.embedding.isnot(None))
+        .group_by(DocumentChunk.embedding_model)
+        .all()
+    )
+
     return {
         "documents_by_technique": {t.value: int(n) for t, n in by_technique},
         "total_documents": sum(int(n) for _, n in by_technique),
         "total_chunks": int(total_chunks),
         "embedded_chunks": int(embedded),
-        "pgvector": _pgvector_available(),
+        #  With the session, not without it. Called bare, `_pgvector_available`
+        #  answers from the flag alone and reported `true` on SQLite and over a json
+        #  column — a capability claim served to the API and to the assistant's
+        #  tools while ranking was happening in Python.
+        "pgvector": _pgvector_available(session),
+        "embeddings_by_model": {(m or "(unlabelled)"): int(n) for m, n in by_model},
     }

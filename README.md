@@ -169,6 +169,31 @@ cnms-fom migrate current            # what revision is this database at?
 cnms-fom migrate up | down
 ```
 
+### pgvector: the flag describes the schema, it does not change it
+
+`PGVECTOR_ENABLED` selects the column type the ORM maps `document_chunks.embedding`
+to, and it is read at import, before anything has looked at the database. Nothing
+makes it agree with the database it is pointed at, and **either direction of
+disagreement breaks retrieval**:
+
+| Setting | Column | What happens |
+|---|---|---|
+| `true` | `vector` | Correct. Indexed ANN search. |
+| `false` | `json` | Correct. Ranking happens in Python. |
+| `true` | `json` | Every read of a chunk fails. Retrieval is down, not degraded. |
+| `false` | `vector` | Embeddings read back as strings. Dense search dies **silently** and answers come from lexical search alone. |
+
+Migration 0009 converts the column to `vector` exactly when the `vector` extension is
+installed, so after `alembic upgrade head` the correct setting is "does this database
+have that extension". Both mismatches are reported at startup and in `/health/ready`
+as `retrieval.ok: false`, with the remedy in the message — you should not have to
+diagnose this from a stack trace.
+
+```bash
+psql -d cnms_fom -c "SELECT udt_name FROM information_schema.columns \
+  WHERE table_name='document_chunks' AND column_name='embedding'"
+```
+
 ### Importing an external materials database
 
 Two-phase by design: everything is staged verbatim, and only rows carrying a
@@ -397,6 +422,27 @@ a `layer_label` meant so one silently checked nothing.
 `docs/COSCIENTIST.md` §8 has the run.
 
 → `docs/COSCIENTIST.md` · `docs/RESEARCH_ASSISTANT.md`
+
+### Changing the embedding model
+
+Retrieval compares only vectors produced by the same embedding model. This is not a
+tuning choice: two models put their coordinates in unrelated bases, so a cosine
+similarity between them is not weak evidence, it is a number with no meaning — and
+since `nomic-embed-text` shares its 768 dimensions with plenty of other models,
+nothing downstream can detect the mix from the vectors alone.
+
+So if you change `OLLAMA_EMBED_MODEL`, **re-ingest the corpus**. Until you do, the
+chunks embedded by the old model are still stored, still searchable lexically, and
+invisible to dense retrieval. Ingest warns when it is about to mix two models, and
+`GET /rag/stats` reports the breakdown:
+
+```json
+"embeddings_by_model": { "nomic-embed-text": 412, "(unlabelled)": 7 }
+```
+
+More than one entry there means your similarities are only comparable within each
+group. `(unlabelled)` is a chunk ingested before the model was recorded; it is
+included in dense search, because excluding it would silently shrink an older corpus.
 
 ## Knowledge cards
 
