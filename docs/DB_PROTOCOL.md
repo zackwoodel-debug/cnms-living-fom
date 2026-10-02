@@ -269,6 +269,36 @@ SLD and the optical quantities are marked `fom_eligible=False`: worth storing
 and correlating, but not "better when larger" for any device, so they may not
 appear in a composite score until someone defines one that uses them.
 
+### A materials-db release (v0.22.0)
+
+The release (`~/code/materials-db/release/materials-db-v0.22.0/`) is the same schema with
+2,129 materials and 1.75 M optical rows, and the importer recognises it by the `MANIFEST.json`
+beside the file. It then reads it with the release's own rules
+(`backend/cnms_fom/materials_release/`, shared with the materials atlas), because the older
+mapping would have been wrong in three ways that matter for a score:
+
+| Release value | Older mapping | Now |
+|---|---|---|
+| `dielectric_static_total \| MP_DFPT` (90) | `k`, MEASURED | `k`, CALCULATED, frequency 0, `reduction_rule` "mean of principal values", no tensor component (so eligibility keeps it out until a direction is supplied) |
+| `dielectric_electronic \| MP_DFPT` (90) | `k`, MEASURED | `eps_inf`, CALCULATED: it is the clamped-ion permittivity |
+| SLDs (periodictable), `density_MP_DFT`, bulk-approximation and lattice-derived densities | MEASURED | CALCULATED (also for older exports, whose labels say the same) |
+| optical datasets | MEASURED | MEASURED, or MODELED where materials-db's `dataset_kind.py` says the page is a model fit; quarantined when that cannot be decided |
+
+Identity follows the release too: a phase comes from the label grammar, or from the stable key
+(`oxides_50:TiO2@rutile`). Specimen form is still not recorded anywhere in the release and is still
+a person's assertion (`--specimen-form`). The method text keeps "DFT" wherever a value is DFT, so
+`check_protocol_compliance.py` correctly flags the missing exchange-correlation functional, which
+the release does not state.
+
+```bash
+python scripts/ingest_materials_db.py survey  ~/code/materials-db/release/materials-db-v0.22.0/materials-db-v0.22.0.sqlite
+python scripts/ingest_materials_db.py stage   <same path>
+python scripts/ingest_materials_db.py promote <same path> --specimen-form bulk_single_crystal --operator "Name"
+```
+
+For *reading* the release — answering "what is n of X, and how good is the evidence?" — use
+the materials atlas instead; it never writes to these tables.
+
 ### The one real bridge to the FOM engine
 
 `derive-eps-inf` estimates ε<sub>∞</sub> from optical dispersion, which feeds

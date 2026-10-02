@@ -64,6 +64,10 @@ vector = ["pgvector>=0.3"]
 # RAG_LLM_PROVIDER=anthropic only when that is acceptable for the corpus at hand.
 anthropic = ["anthropic>=1.0"]
 
+# The materials-atlas generator and a release-aware import: materials-db's own
+# dataset_kind.py helper reads refractiveindex.info YAML.
+atlas = ["pyyaml>=6.0"]
+
 dev = [
   "pytest>=8.2",
   "httpx>=0.27",
@@ -71,7 +75,7 @@ dev = [
   "mypy>=1.10",
 ]
 
-all = ["cnms-living-fom[descriptors,bo,rag,vector,anthropic,dev]"]
+all = ["cnms-living-fom[descriptors,bo,rag,vector,anthropic,atlas,dev]"]
 
 [project.scripts]
 cnms-fom = "cnms_fom.cli:main"

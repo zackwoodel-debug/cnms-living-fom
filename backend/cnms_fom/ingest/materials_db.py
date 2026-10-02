@@ -32,10 +32,27 @@ the reason it is built the way it is rather than as a straight column mapping:
 
 ``survey()`` reports all of that without writing anything, and is the default
 mode of the CLI wrapper.
+
+A materials-db *release* (a ``.sqlite`` with its ``MANIFEST.json`` beside it, e.g.
+v0.22.0) is read with the release's own rules, through ``cnms_fom.materials_release``,
+the same package the materials atlas uses:
+
+* labels are parsed by the release grammar, and a material's phase falls back to
+  the one in its stable key (``oxides_50:TiO2@rutile``);
+* every physical value is tiered by what its label says it is. DFT and DFPT
+  values, all SLDs, and densities computed from lattice parameters or standing in
+  for a film are CALCULATED; only literature and datasheet densities are MEASURED.
+  An older export tiered these MEASURED, which would let a 0 K DFT permittivity
+  reach a score as if it were measured;
+* ``dielectric_electronic`` is eps_inf, not the static k;
+* an optical dataset is MEASURED or, if materials-db's dataset_kind.py says it is
+  a model fit, MODELED; when that cannot be decided (no materials-db checkout, or
+  one that is not the release's) the rows are quarantined, not assumed measured.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -57,6 +74,15 @@ from cnms_fom.db.models import (
     SpectralSeries,
 )
 from cnms_fom.fom_engine.identity import FormulaNotCanonical, reduced_formula
+from cnms_fom.materials_release import (
+    DatasetKindHelper,
+    LabelError,
+    Release,
+    ReleaseError,
+    parse_optical_label,
+    parse_physical_label,
+    physical_kind,
+)
 
 from .labels import axis_to_tensor_component, parse_dataset_label
 
@@ -118,6 +144,61 @@ class IngestionReport:
         }
 
 
+def _release_parse(table: str, label: str | None) -> dict:
+    """A release label parsed by the release grammar, in the staged ``parsed`` shape."""
+    if table == "optical_dispersion":
+        parsed = parse_optical_label(label)
+        return {
+            "raw": label,
+            "grammar": "materials-db release",
+            "phase": parsed.phase,
+            "source_tag": parsed.tag,
+            "axis": parsed.axis,
+        }
+    if table == "physical_properties":
+        try:
+            parsed = parse_physical_label(label)
+            kind = physical_kind(parsed)
+        except LabelError as exc:
+            return {"raw": label, "grammar": "materials-db release", "error": str(exc)}
+        return {
+            "raw": label,
+            "grammar": "materials-db release",
+            "phase": parsed.phase,
+            "quantity": parsed.quantity,
+            "origin": parsed.origin,
+            "method": parsed.method,
+            "kind": kind.kind,
+            "provenance": kind.provenance,
+            "kind_reason": kind.reason,
+        }
+    return {"raw": label, "grammar": "materials-db release"}
+
+
+#  Release quantity names -> CNMS registry keys. dielectric_electronic is the
+#  clamped-ion permittivity, i.e. eps_inf: storing it as the static k would put a
+#  high-frequency number where a low-frequency one belongs.
+RELEASE_QUANTITY_KEYS: dict[str, tuple[str, str, str]] = {
+    "density": ("rho", "descriptor", "g/cm^3"),
+    "xray_sld_real": ("sld_xray", "property", "1e-6 A^-2"),
+    "xray_sld_imag": ("sld_xray_imag", "property", "1e-6 A^-2"),
+    "neutron_sld_real": ("sld_neutron", "property", "1e-6 A^-2"),
+    "neutron_sld_imag": ("sld_neutron_imag", "property", "1e-6 A^-2"),
+    "dielectric_static_total": ("k", "property", "dimensionless"),
+    "dielectric_electronic": ("eps_inf", "property", "dimensionless"),
+}
+
+RELEASE_COLUMN = {
+    "density": "density_g_cm3",
+    "xray_sld_real": "xray_sld",
+    "xray_sld_imag": "xray_sld",
+    "neutron_sld_real": "neutron_sld",
+    "neutron_sld_imag": "neutron_sld",
+    "dielectric_static_total": "dielectric_constant",
+    "dielectric_electronic": "dielectric_constant",
+}
+
+
 def _connect(path: Path) -> sqlite3.Connection:
     if not path.exists():
         raise FileNotFoundError(path)
@@ -149,6 +230,15 @@ def survey(path: Path | str) -> IngestionReport:
     """
     path = Path(path)
     report = IngestionReport(source=str(path), mode="survey")
+    release = Release.detect(path)
+    if release is not None:
+        report.coverage["materials_db_release"] = release.version
+        report.notes.append(
+            f"materials-db release v{release.version}: labels are read with the release grammar, physical "
+            "values are tiered by what their label says (DFT, DFPT, SLD and derived densities CALCULATED; "
+            "literature densities MEASURED), and optical datasets need materials-db's dataset_kind.py "
+            "(MATERIALS_DB_ROOT) to be told measured from model fit."
+        )
 
     with _connect(path) as connection:
         tables = _table_names(connection)
@@ -186,14 +276,22 @@ def survey(path: Path | str) -> IngestionReport:
             ).fetchone()
             report.coverage["optical_dispersion"] = dict(row)
 
-        #  How much of the corpus can actually name its own phase.
+        #  How much of the corpus can actually name its own phase. A release's label
+        #  grammar names it, or the stable key does (oxides_50:TiO2@rutile).
         if "optical_dispersion" in tables:
             with_phase = without_phase = 0
+            key_phase = (
+                {mid: entry.polymorph for mid, entry in release.registry().items()} if release is not None else {}
+            )
             for row in connection.execute(
-                "SELECT dataset_label, COUNT(*) AS n FROM optical_dispersion GROUP BY dataset_label"
+                "SELECT material_id, dataset_label, COUNT(*) AS n FROM optical_dispersion "
+                "GROUP BY material_id, dataset_label"
             ):
-                parsed = parse_dataset_label(row["dataset_label"])
-                if parsed.phase:
+                if release is not None:
+                    phase = parse_optical_label(row["dataset_label"]).phase or key_phase.get(row["material_id"])
+                else:
+                    phase = parse_dataset_label(row["dataset_label"]).phase
+                if phase:
                     with_phase += row["n"]
                 else:
                     without_phase += row["n"]
@@ -236,6 +334,8 @@ def stage(session, path: Path | str, *, limit: int | None = None) -> IngestionRe
     path = Path(path)
     report = IngestionReport(source=str(path), mode="stage")
     source_name = path.name
+    release = Release.detect(path)
+    registry = release.registry() if release is not None else {}
 
     existing = {
         (table, row_id)
@@ -261,6 +361,11 @@ def stage(session, path: Path | str, *, limit: int | None = None) -> IngestionRe
         ):
             if table not in tables:
                 continue
+            if release is not None and table == "optical_dispersion":
+                #  1.75 M rows, each carrying its citation, would be gigabytes of staging.
+                #  A release is staged one record per dataset instead, its points inline.
+                _stage_release_datasets(session, connection, release, source_name, existing, sources, report, limit)
+                continue
             query = f"SELECT * FROM {table}"
             if limit:
                 query += f" LIMIT {int(limit)}"
@@ -278,14 +383,20 @@ def stage(session, path: Path | str, *, limit: int | None = None) -> IngestionRe
                 if payload.get("source_id") in sources:
                     payload["_source"] = sources[payload["source_id"]]
 
-                parsed = parse_dataset_label(payload.get("dataset_label"))
+                if release is not None:
+                    payload["_release"] = {"version": release.version, "manifest_commit": release.manifest.get("git_commit")}
+                    if table == "materials" and int(payload["material_id"]) in registry:
+                        payload["_registry_key"] = registry[int(payload["material_id"])].key
+                    parsed_dict = _release_parse(table, payload.get("dataset_label"))
+                else:
+                    parsed_dict = parse_dataset_label(payload.get("dataset_label")).as_dict()
                 batch.append(
                     ExternalRecord(
                         source_database=source_name,
                         source_table=table,
                         source_row_id=row_id,
                         payload=payload,
-                        parsed=parsed.as_dict(),
+                        parsed=parsed_dict,
                         status="staged",
                     )
                 )
@@ -306,6 +417,78 @@ def stage(session, path: Path | str, *, limit: int | None = None) -> IngestionRe
     return report
 
 
+def _dataset_row_id(material_id, label: str) -> str:
+    """A stable staging id for (material, dataset label) that fits source_row_id (64 chars)."""
+    return f"{material_id}:{hashlib.sha256((label or '').encode()).hexdigest()[:24]}"
+
+
+def _stage_release_datasets(session, connection, release, source_name, existing, sources, report, limit) -> None:
+    """Stage each optical dataset of a release as one record: its metadata and its stored points."""
+    rows = connection.execute(
+        "SELECT record_id, material_id, dataset_label, wavelength_nm, n, k, temperature_c, raw_record_table, "
+        "source_id FROM optical_dispersion ORDER BY material_id, dataset_label, wavelength_nm, record_id"
+    )
+    batch: list[ExternalRecord] = []
+    staged = 0
+
+    def flush(key, points, meta) -> None:
+        nonlocal staged
+        material_id, label = key
+        row_id = _dataset_row_id(material_id, label)
+        if ("optical_dataset", row_id) in existing:
+            return
+        payload = {
+            "material_id": material_id,
+            "dataset_label": label,
+            "temperatures_c": sorted(meta["temps"], key=lambda t: (t is None, t)),
+            "raw_record_tables": sorted(meta["tables"]),
+            "source_ids": sorted(meta["sources"]),
+            "n_points": len(points),
+            #  [wavelength_nm, n, k, record_id], exactly as stored, in wavelength order.
+            "points": points,
+            "_source": sources.get(next(iter(meta["sources"]))) if len(meta["sources"]) == 1 else None,
+            "_release": {"version": release.version, "manifest_commit": release.manifest.get("git_commit")},
+        }
+        batch.append(
+            ExternalRecord(
+                source_database=source_name,
+                source_table="optical_dataset",
+                source_row_id=row_id,
+                source_sha256=release.sha256,
+                payload=payload,
+                parsed=_release_parse("optical_dispersion", label),
+                status="staged",
+            )
+        )
+        staged += 1
+        if len(batch) >= 200:
+            session.add_all(batch)
+            session.flush()
+            batch.clear()
+
+    key = None
+    points: list = []
+    meta: dict = {}
+    for record_id, mid, label, wl, n, k, t, table, sid in rows:
+        if (mid, label) != key:
+            if key is not None:
+                flush(key, points, meta)
+                if limit and staged >= limit:
+                    key = None
+                    break
+            key, points, meta = (mid, label), [], {"temps": set(), "tables": set(), "sources": set()}
+        points.append([wl, n, k, record_id])
+        meta["temps"].add(t)
+        meta["tables"].add(table)
+        meta["sources"].add(sid)
+    if key is not None:
+        flush(key, points, meta)
+    if batch:
+        session.add_all(batch)
+        session.flush()
+    report.staged += staged
+
+
 # ---------------------------------------------------------------------------
 # Promote
 # ---------------------------------------------------------------------------
@@ -319,6 +502,8 @@ def promote(
     phase_map: dict[str, str] | None = None,
     include_optical: bool = True,
     operator: str = "",
+    materials_db_root: Path | str | None = None,
+    kinds: DatasetKindHelper | None = None,
 ) -> IngestionReport:
     """Create analysis rows from staged records that satisfy the protocol.
 
@@ -335,6 +520,17 @@ def promote(
     phase_map = phase_map or {}
     report = IngestionReport(source=str(path), mode="promote")
     now = datetime.now(timezone.utc)
+    release = Release.detect(path)
+    kinds_unavailable: str | None = None
+    if release is not None and include_optical and kinds is None:
+        try:
+            kinds = DatasetKindHelper(release, materials_db_root)
+        except ReleaseError as exc:
+            kinds_unavailable = str(exc)
+            report.notes.append(
+                f"Optical datasets cannot be told measured from model fit ({exc}); they are quarantined, "
+                "not assumed measured."
+            )
     provenance_note = (
         f"Imported from {path.name}; specimen form asserted as {specimen_form.value}"
         + (f" by {operator}" if operator else "")
@@ -369,7 +565,14 @@ def promote(
             return parsed["phase"]
         holder = external_materials.get(external_id)
         name = (holder.payload.get("name") if holder else "") or ""
-        return phase_map.get(external_id) or phase_map.get(name)
+        mapped = phase_map.get(external_id) or phase_map.get(name)
+        if mapped:
+            return mapped
+        #  A release key names the phase for its earliest families
+        #  (oxides_50:TiO2@rutile): a release fact, not a guess.
+        key = (holder.payload.get("_registry_key") if holder else None) or ""
+        selection = key.split(":", 1)[1] if ":" in key else ""
+        return selection.split("@", 1)[1] if "@" in selection else None
 
     #  material cache keyed by (external material id, polymorph)
     materials: dict[tuple[str, str], Material] = {}
@@ -439,6 +642,16 @@ def promote(
             continue
 
         source = payload.get("_source") or {}
+        if parsed.get("grammar") == "materials-db release":
+            if parsed.get("error"):
+                _quarantine(record, f"label outside the release grammar: {parsed['error']}", ["dataset_label"])
+                continue
+            _promote_release_physical(session, path, record, material, source, now, report)
+            record.status = "promoted"
+            record.material_id = material.id
+            record.promoted_at = now
+            report.promoted += 1
+            continue
         wrote = False
         for column, (default_key, kind, units) in PHYSICAL_COLUMN_MAP.items():
             value = payload.get(column)
@@ -458,6 +671,7 @@ def promote(
             labelled = parsed.get("quantity")
             if labelled and labelled.startswith(default_key):
                 key = labelled
+            tier = _legacy_tier(payload.get("dataset_label"))
 
             if kind == "descriptor":
                 session.add(
@@ -467,7 +681,7 @@ def promote(
                         value=float(value),
                         units=units,
                         method=method,
-                        provenance_tier=DEFAULT_TIER,
+                        provenance_tier=tier,
                     )
                 )
                 report.descriptors_created += 1
@@ -482,7 +696,7 @@ def promote(
                         method=method,
                         temperature_k=(temperature_c + 273.15) if temperature_c is not None else None,
                         frequency_hz=payload.get("frequency_hz"),
-                        provenance_tier=DEFAULT_TIER,
+                        provenance_tier=tier,
                         doi=source.get("doi"),
                         source_url=source.get("url"),
                         database_identifier=f"{path.name}:{record.source_table}",
@@ -502,18 +716,204 @@ def promote(
         record.promoted_at = now
         report.promoted += 1
 
+    # --- optical datasets of a release ---------------------------------------
+    if include_optical and by_table.get("optical_dataset"):
+        _promote_release_datasets(
+            session, path, by_table["optical_dataset"], report, _resolve_phase, _material_for, _quarantine, now,
+            release=release, kinds=kinds, kinds_unavailable=kinds_unavailable,
+        )
+
     # --- optical_dispersion -------------------------------------------------
     if include_optical:
         report = _promote_optical(
-            session, path, by_table, report, _resolve_phase, _material_for, _quarantine, now
+            session, path, by_table, report, _resolve_phase, _material_for, _quarantine, now,
+            release=release, kinds=kinds, kinds_unavailable=kinds_unavailable,
         )
 
     session.flush()
     return report
 
 
+#  What each release value kind is, short enough for PropertyValue.method (128 chars).
+KIND_TAGS = {
+    "literature": "literature",
+    "calculated_dft": "DFT, calculated",
+    "bulk_approximation": "bulk DFT value for a film, calculated",
+    "calculated_from_lattice": "from lattice parameters, calculated",
+    "calculated_sld": "periodictable, calculated",
+    "calculated_dfpt": "DFT perturbation theory at 0 K, calculated",
+}
+
+
+def _legacy_tier(label: str | None) -> ProvenanceTier:
+    """An older export's value: CALCULATED where its label says DFT, SLD or derived, else the default.
+
+    The older CNMS exports share the release's label vocabulary, so a periodictable SLD
+    or a density_MP_DFT is recognisably calculated there too. A label the grammar cannot
+    read keeps the documented literature default (MEASURED with its DOI).
+    """
+    try:
+        kind = physical_kind(parse_physical_label(label))
+    except LabelError:
+        return DEFAULT_TIER
+    return ProvenanceTier.MEASURED if kind.provenance == "measured" else ProvenanceTier.CALCULATED
+
+
+def _promote_release_physical(session, path, record, material, source, now, report) -> None:
+    """One release physical row: its quantity, column and tier all read from its label."""
+    payload, parsed = record.payload, record.parsed
+    quantity = parsed["quantity"]
+    key, kind, units = RELEASE_QUANTITY_KEYS[quantity]
+    value = float(payload[RELEASE_COLUMN[quantity]])
+    tier = ProvenanceTier.MEASURED if parsed["provenance"] == "measured" else ProvenanceTier.CALCULATED
+    version = (payload.get("_release") or {}).get("version")
+    #  The label verbatim plus what kind of value it is. "DFT" appears wherever a value is
+    #  DFT, so the compliance check asks for its XC functional, which the release does not
+    #  state; that flag is correct and is not worked around.
+    method = f"materials-db v{version}: {parsed['raw']} ({KIND_TAGS[parsed['kind']]})"
+    if len(method) > 128:
+        raise ValueError(f"method text for {parsed['raw']!r} exceeds the 128-character column")
+    if kind == "descriptor":
+        session.add(
+            DescriptorValue(
+                material_id=material.id,
+                descriptor_key=key,
+                value=value,
+                units=units,
+                method=method,
+                provenance_tier=tier,
+            )
+        )
+        report.descriptors_created += 1
+        return
+    temperature_c = payload.get("temperature_c")
+    #  The release's dielectric constants are the mean of the DFPT tensor's principal
+    #  values (README). That is a reduction, so it is recorded (Sec. 3.2), and no tensor
+    #  component is claimed: a mean is not a direction, and 'k' requires one before the
+    #  eligibility filter will let it into an analysis.
+    reduction = "mean of principal values (materials-db)" if quantity.startswith("dielectric_") else None
+    session.add(
+        PropertyValue(
+            material_id=material.id,
+            property_key=key,
+            value=value,
+            units=units,
+            method=method,
+            reduction_rule=reduction,
+            temperature_k=(temperature_c + 273.15) if temperature_c is not None else None,
+            frequency_hz=payload.get("frequency_hz"),
+            provenance_tier=tier,
+            doi=source.get("doi"),
+            source_url=source.get("url"),
+            database_identifier=f"{path.name}:{record.source_table}",
+            source_locator=str(payload.get("record_id")),
+            uncertainty=source.get("uncertainty"),
+            ingested_at=now,
+        )
+    )
+    report.properties_created += 1
+
+
+def _promote_release_datasets(
+    session, path, records, report, resolve_phase, material_for, quarantine, now, *, release, kinds, kinds_unavailable
+) -> None:
+    """One staged release dataset -> an n series and a k series, tiered by dataset_kind.py."""
+    for record in records:
+        payload, parsed = record.payload, record.parsed or {}
+        external_id = str(payload["material_id"])
+        if len(payload["temperatures_c"]) != 1 or len(payload["raw_record_tables"]) != 1 or len(payload["source_ids"]) != 1:
+            quarantine(record, "a dataset with more than one temperature, page or source", ["dataset_label"])
+            continue
+        polymorph = resolve_phase(external_id, parsed)
+        if not polymorph:
+            quarantine(
+                record,
+                "no polymorph recoverable (Sec. 2.1: a formula is not a material identifier)",
+                ["polymorph"],
+            )
+            continue
+        if kinds is None:
+            quarantine(
+                record,
+                "measured vs model fit cannot be decided without materials-db's dataset_kind.py "
+                f"({kinds_unavailable or 'no checkout'})",
+                ["dataset_kind"],
+            )
+            continue
+        material = material_for(external_id, polymorph)
+        if material is None:
+            quarantine(record, "external material has no formula", ["formula"])
+            continue
+        fit = kinds.model_fit_reason(payload["raw_record_tables"][0])
+        tier = ProvenanceTier.MODELED if fit else ProvenanceTier.MEASURED
+        method = f"optical dispersion, materials-db v{release.version}, " + (
+            "model fit of the dielectric function" if fit else "measured"
+        )
+        source = payload.get("_source") or {}
+        temperature_c = payload["temperatures_c"][0]
+        axis = (parsed.get("axis") or "").removesuffix("-axis") or None
+        for quantity, column in (("n", 1), ("k", 2)):
+            kept: dict[float, float] = {}
+            repeated = 0
+            for point in payload["points"]:
+                if point[column] is None:
+                    continue
+                if point[0] in kept:
+                    #  The source repeats a wavelength (the MANIFEST lists every case). Keep
+                    #  the first stored row, never an average, and count the rest.
+                    repeated += 1
+                    continue
+                kept[point[0]] = point[column]
+            if repeated:
+                report.quarantine_reasons[
+                    "repeated wavelength in the source: first stored row kept, the rest not loaded"
+                ] += repeated
+            if not kept:
+                continue
+            series = SpectralSeries(
+                material_id=material.id,
+                quantity=quantity,
+                units="dimensionless",
+                independent_variable="wavelength_nm",
+                axis=parsed.get("axis"),
+                tensor_component=axis_to_tensor_component(axis),
+                temperature_k=(temperature_c + 273.15) if temperature_c is not None else None,
+                method=method,
+                provenance_tier=tier,
+                doi=source.get("doi"),
+                source_url=source.get("url"),
+                database_identifier=f"{path.name}:optical_dispersion",
+                dataset_label=payload["dataset_label"],
+                n_points=len(kept),
+                x_min=min(kept),
+                x_max=max(kept),
+            )
+            series.context_digest = context_digest(
+                {
+                    "method": series.method,
+                    "temperature_k": series.temperature_k,
+                    "tensor_component": series.tensor_component,
+                    "doi": series.doi,
+                    "database_identifier": f"{series.database_identifier}:{payload['dataset_label']}",
+                    "provenance_tier": series.provenance_tier,
+                }
+            )
+            session.add(series)
+            session.flush()
+            report.series_created += 1
+            rows = [{"series_id": series.id, "x_value": x, "y_value": y} for x, y in kept.items()]
+            for start in range(0, len(rows), POINT_BATCH):
+                session.execute(insert(SpectralPoint), rows[start : start + POINT_BATCH])
+            report.points_created += len(rows)
+        record.status = "promoted"
+        record.material_id = material.id
+        record.promoted_at = now
+        report.promoted += 1
+
+
 def _promote_optical(
-    session, path, by_table, report, resolve_phase, material_for, quarantine, now
+    session, path, by_table, report, resolve_phase, material_for, quarantine, now,
+    *, release=None, kinds=None, kinds_unavailable=None,
 ) -> IngestionReport:
     """Group optical rows into series, then bulk-load their points.
 
@@ -553,6 +953,23 @@ def _promote_optical(
 
     for key, rows in grouped.items():
         external_id, polymorph, axis, _source_tag, dataset_label = key
+        tier, method = DEFAULT_TIER, "optical dispersion (external import)"
+        if release is not None:
+            if kinds is None:
+                for record in holders[key]:
+                    quarantine(
+                        record,
+                        "measured vs model fit cannot be decided without materials-db's dataset_kind.py "
+                        f"({kinds_unavailable or 'no checkout'})",
+                        ["dataset_kind"],
+                    )
+                continue
+            fit = kinds.model_fit_reason(rows[0].get("raw_record_table"))
+            tier = ProvenanceTier.MODELED if fit else ProvenanceTier.MEASURED
+            #  The model-fit evidence is long; the dataset label on the series identifies the page.
+            method = f"optical dispersion, materials-db v{release.version}, " + (
+                "model fit of the dielectric function" if fit else "measured"
+            )
         material = material_for(external_id, polymorph)
         if material is None:
             for record in holders[key]:
@@ -583,8 +1000,8 @@ def _promote_optical(
                 axis=axis,
                 tensor_component=axis_to_tensor_component(axis),
                 temperature_k=(temperature_c + 273.15) if temperature_c is not None else None,
-                method="optical dispersion (external import)",
-                provenance_tier=DEFAULT_TIER,
+                method=method,
+                provenance_tier=tier,
                 doi=source.get("doi"),
                 source_url=source.get("url"),
                 database_identifier=f"{path.name}:optical_dispersion",
