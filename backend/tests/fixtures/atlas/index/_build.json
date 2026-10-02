@@ -1,0 +1,104 @@
+{
+  "counts": {
+    "aliases": 78,
+    "chunks": 369,
+    "datasets": 56,
+    "families": 7,
+    "gap_candidates": 217,
+    "links": 464,
+    "materials": 12,
+    "notes": 87,
+    "properties": 7,
+    "sources": 43,
+    "values": 100
+  },
+  "db_sha256": "6295f0dda5f7e0d0d8d43d8575d1936a94ba022dc340535975b8b883aecaec0b",
+  "density_kinds": {
+    "bulk_approximation": 1,
+    "calculated_dft": 6,
+    "calculated_from_lattice": 1,
+    "literature": 4
+  },
+  "generator_files": [
+    "backend/cnms_fom/materials_release/__init__.py",
+    "backend/cnms_fom/materials_release/kinds.py",
+    "backend/cnms_fom/materials_release/labels.py",
+    "backend/cnms_fom/materials_release/release.py",
+    "materials-atlas/atlas/__init__.py",
+    "materials-atlas/atlas/authors.py",
+    "materials-atlas/atlas/check.py",
+    "materials-atlas/atlas/evidence.py",
+    "materials-atlas/atlas/facts.py",
+    "materials-atlas/atlas/ids.py",
+    "materials-atlas/atlas/index.py",
+    "materials-atlas/atlas/links.py",
+    "materials-atlas/atlas/pages.py",
+    "materials-atlas/atlas/render.py",
+    "materials-atlas/atlas/templates.py",
+    "materials-atlas/atlas/vault.py",
+    "materials-atlas/atlas/yamlfm.py",
+    "materials-atlas/build.py"
+  ],
+  "generator_sha256": "d8d02c97e935b7de572753adde6b39e5956d3046cb47e40d40e759809714ba05",
+  "helper_provenance": {
+    "helper_files_unchanged_since_release_commit": [
+      "scripts/dataset_kind.py",
+      "scripts/generate_ml_release_set.py",
+      "scripts/fluoride_nitride_sulfide_material_list.py",
+      "scripts/pure_element_material_list.py",
+      "data/step1_selections*.json"
+    ],
+    "materials_db_release_commit": "a624aaaa766578e82d496774c73403dd8a41ef84",
+    "refractiveindex_info_commit": "c5c2f188e848453def5970e347399d653df2ffc2"
+  },
+  "independence": {
+    "k_633nm": {
+      "multi-group": 2,
+      "one group": 1,
+      "unknown": 0
+    },
+    "n_633nm": {
+      "multi-group": 2,
+      "one group": 2,
+      "unknown": 0
+    }
+  },
+  "index_schema": 1,
+  "k_status": {
+    "measured": 4,
+    "not_measured": 5,
+    "partially_measured": 3
+  },
+  "materials_db_release_commit": "a624aaaa766578e82d496774c73403dd8a41ef84",
+  "materials_project_database_version": "2026.04.13",
+  "n_633nm_grades": {
+    "entries": {
+      "A": 2,
+      "B": 1,
+      "C": 8,
+      "D": 2,
+      "S": 0,
+      "T": 3,
+      "none": 3
+    },
+    "materials_by_grade_set": {
+      "A": 1,
+      "A+T+none": 1,
+      "B": 1,
+      "C": 6,
+      "D": 1,
+      "D+none": 1,
+      "none": 1
+    },
+    "n_entries": 19
+  },
+  "refractiveindex_info_commit": "c5c2f188e848453def5970e347399d653df2ffc2",
+  "release_notices": [
+    "Copper gallium sulfide (id 219): dataset 'Boyd1971-120C | e-ray': the label names 120 degC but its rows store no temperature",
+    "Copper gallium sulfide (id 219): dataset 'Boyd1971-20C | e-ray': the label names 20 degC but its rows store no temperature",
+    "Copper gallium sulfide (id 219): n_633nm | e-ray: the release counted 'Boyd1971-120C | e-ray' as ambient, but its label names 120 degC; the stored consensus mixes temperatures"
+  ],
+  "release_version": "0.22.0",
+  "sample": false,
+  "subset": "materials [38, 42, 72, 77, 132, 133, 219, 223, 232, 310, 316, 1840]"
+}

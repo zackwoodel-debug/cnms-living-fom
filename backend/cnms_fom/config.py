@@ -106,11 +106,25 @@ class Settings(BaseSettings):
     #  regardless; this only bounds what goes back into the prompt.
     assistant_history_turns: int = 6
 
+    # --- materials-atlas (reference data, read-only) ------------------------
+    #  The index built by `cnms-fom atlas build` from a materials-db release. Relative
+    #  paths resolve against the repository root. The atlas holds published reference
+    #  values; nothing reads them into property_values, a FOM score or the optimizer.
+    materials_atlas_index: str = "materials-atlas/index/atlas_index.sqlite"
+    #  The release this platform is pinned to. An index built from any other release is
+    #  stale, and the atlas tools refuse it rather than answer from the wrong data.
+    materials_atlas_release: str = "0.22.0"
+    #  Where `cnms-fom atlas build` reads the release from.
+    materials_db_release_dir: str = "~/code/materials-db/release/materials-db-v0.22.0"
+
     # --- API --------------------------------------------------------------
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     log_level: str = "INFO"
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    #  The dashboard (Vite, :5173) and Quark (:8080) both call the API from the browser.
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:5173", "http://localhost:8080"]
+    )
 
     # --- Analysis defaults (FOM_PROOF) ------------------------------------
     permutation_b: int = Field(

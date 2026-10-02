@@ -714,7 +714,9 @@ def test_an_answer_is_withheld_when_every_tool_came_back_empty(db):
     )
     answer = ask(db, "What substrate temperature for MBE of GaAs on Ge?", provider=provider)
 
-    assert answer.answer == EMPTY_EVIDENCE_ANSWER
+    assert answer.answer.startswith(EMPTY_EVIDENCE_ANSWER)
+    #  The withheld answer says what was searched, so "nothing found" is checkable.
+    assert "What was searched:\n- search_corpus(query='MBE GaAs on Ge substrate temperature')" in answer.answer
     assert answer.insufficient_context is True
     #  The fabricated numbers are gone from the answer...
     assert "200-350" not in answer.answer

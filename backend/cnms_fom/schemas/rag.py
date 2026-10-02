@@ -241,6 +241,10 @@ class ChatResponse(BaseModel):
         "what the model would have said, kept for transparency — an ungrounded draft, not an "
         "answer.",
     )
+    unsupported_numbers: list[str] = Field(
+        default_factory=list,
+        description="Numbers in the answer that no tool returned; also named in the answer text.",
+    )
     disclaimer: str = (
         "Retrieval output is for reading, not for data entry. FOM_PROOF Sec. 2.3: a missing "
         "property may not be filled from a plausible number. Fitted values enter the analysis "

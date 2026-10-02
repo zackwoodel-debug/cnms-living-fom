@@ -119,6 +119,15 @@ def ready() -> dict:
     except Exception:  # noqa: BLE001 - a check that cannot run reports nothing
         pass
 
+    #  The materials atlas: optional (the platform works without it), but a missing or
+    #  stale index is reported here, because the assistant's atlas tools will refuse it.
+    try:
+        from cnms_fom.atlas.reader import status as atlas_status
+
+        checks["atlas"] = atlas_status()
+    except Exception as exc:  # noqa: BLE001 - readiness must report, not raise
+        checks["atlas"] = {"ok": False, "error": str(exc)}
+
     return {
         "status": (
             "ok"
