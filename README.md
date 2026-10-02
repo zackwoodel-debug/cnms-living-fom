@@ -227,7 +227,28 @@ external source does not record it, and asserting it is a human judgement that
 belongs on the record rather than in the importer.
 
 See `docs/DB_PROTOCOL.md` for the full mapping, the constraint table, and what a
-survey of the CNMS oxide database actually found.
+survey of the CNMS oxide database actually found, and how a materials-db *release*
+(v0.22.0) is read: DFT, DFPT and SLD values are tiered CALCULATED and model-fit
+spectra MODELED, by the release's own labels.
+
+### The materials atlas (materials-db reference data)
+
+```bash
+cnms-fom atlas build                # vault + index from the release, every check, ~40 s
+cnms-fom atlas lookup "fused silica" --quantity n
+```
+
+A generated Obsidian vault and a read-only search index over the materials-db v0.22.0
+release: 2,129 materials, each value exactly as stored with its provenance, whether it
+is measured, a model fit or a calculation, and an evidence grade by a published rubric.
+The assistant reads it through five `atlas_*` tools, so Quark can answer "what is n of
+X at 633 nm, and how good is the evidence?" with the material's id, the dataset, the
+grade and the source. Reference values only: nothing reaches `property_values`.
+→ `materials-atlas/README.md`
+
+Quark sends every question to `POST /rag/chat` (start the API with `cnms-fom serve`;
+`VITE_CNMS_API_URL` overrides `http://localhost:8000`), so its answers go through the
+same evidence guard as the API.
 
 ---
 

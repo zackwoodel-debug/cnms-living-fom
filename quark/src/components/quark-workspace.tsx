@@ -17,7 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { QuarkMark } from "@/components/quark-mark";
 import { cn } from "@/lib/utils";
-import { streamOllamaChat } from "@/lib/ollama";
+import { askAssistant, CNMS_API_URL, evidenceMarkdown } from "@/lib/cnms";
 import { useNavigate } from "@tanstack/react-router";
 import {
   Atom,
@@ -45,6 +45,8 @@ type Thread = {
   title: string;
   meta: string;
   messages: ChatMessage[];
+  // The backend's conversation key: it keeps the history and the evidence trail.
+  sessionKey?: string;
 };
 
 const initialThreads: Thread[] = [
@@ -165,7 +167,6 @@ export function QuarkWorkspace({ threadId }: { threadId: string }) {
       role: "assistant",
       content: "",
     };
-    const history = [...activeThread.messages, userMessage];
     setThreads((current) =>
       current.map((thread) =>
         thread.id === targetThreadId
@@ -186,20 +187,26 @@ export function QuarkWorkspace({ threadId }: { threadId: string }) {
     abortControllerRef.current = controller;
 
     try {
-      await streamOllamaChat({
-        messages: history.map(({ role, content }) => ({ role, content })),
+      const turn = await askAssistant({
+        question: prompt,
+        sessionKey: activeThread.sessionKey,
         signal: controller.signal,
-        onStart: () => setStatus("streaming"),
-        onToken: (token) => {
-          updateThreadMessages(targetThreadId, (messages) =>
-            messages.map((message) =>
-              message.id === assistantMessage.id
-                ? { ...message, content: message.content + token }
-                : message,
-            ),
-          );
-        },
       });
+      setThreads((current) =>
+        current.map((thread) =>
+          thread.id === targetThreadId
+            ? {
+                ...thread,
+                sessionKey: turn.sessionKey,
+                messages: thread.messages.map((message) =>
+                  message.id === assistantMessage.id
+                    ? { ...message, content: turn.answer + evidenceMarkdown(turn) }
+                    : message,
+                ),
+              }
+            : thread,
+        ),
+      );
       setStatus("ready");
     } catch (streamError) {
       if (controller.signal.aborted) {
@@ -211,7 +218,7 @@ export function QuarkWorkspace({ threadId }: { threadId: string }) {
         setError(
           streamError instanceof Error
             ? streamError.message
-            : "Quark could not reach the local model.",
+            : "Quark could not reach the CNMS backend.",
         );
         setStatus("error");
       }
@@ -379,7 +386,7 @@ export function QuarkWorkspace({ threadId }: { threadId: string }) {
                   <Message from={message.role} key={message.id}>
                     <MessageContent className="group-[.is-user]:bg-primary group-[.is-user]:text-primary-foreground">
                       <MessageResponse>
-                        {message.content || "Connecting to local model…"}
+                        {message.content || "Searching the evidence…"}
                       </MessageResponse>
                     </MessageContent>
                   </Message>
@@ -404,7 +411,8 @@ export function QuarkWorkspace({ threadId }: { threadId: string }) {
               />
               <PromptInputFooter className="px-3 pb-3">
                 <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                  <span className="size-1.5 rounded-full bg-status" /> Ollama · localhost:11434
+                  <span className="size-1.5 rounded-full bg-status" />
+                  {`CNMS assistant · ${CNMS_API_URL.replace(/^https?:\/\//, "")} · evidence required`}
                 </div>
                 <PromptInputSubmit
                   className="bg-primary text-primary-foreground hover:bg-primary/90"
