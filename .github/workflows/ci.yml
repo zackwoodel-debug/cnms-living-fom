@@ -49,16 +49,20 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,atlas]"
 
       - name: Lint
-        run: ruff check backend/ scripts/ migrations/
+        run: ruff check backend/ scripts/ migrations/ materials-atlas/
 
       - name: Test
         env:
           DATABASE_URL: sqlite+pysqlite:///./ci.db
           PGVECTOR_ENABLED: "false"
         run: pytest -q --durations=10
+
+      - name: materials-atlas generator (rubrics, authors, templates)
+        # The tests that need the materials-db release skip without it, and say so.
+        run: pytest -q -rs materials-atlas/tests
 
   # ---------------------------------------------------------------------------
   postgres:

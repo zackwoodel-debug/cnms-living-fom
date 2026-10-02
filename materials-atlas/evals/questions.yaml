@@ -1,0 +1,256 @@
+# Retrieval evals for the materials atlas (materials-atlas/CLAUDE.md section 10).
+#
+# Every expected value was read from the release database directly (sqlite3, mode=ro), not
+# from the atlas, so the eval cannot pass by agreeing with itself. Never tune the data to pass
+# an eval: tune the index, the tools or the prompt, and say which.
+#
+# kind: lookup  -> atlas_lookup(material, quantity); pass when the matched note ids equal
+#                  `notes` and every expected value is present with the expected fields.
+# kind: search  -> atlas_search(query); hit@1 / hit@5 on `notes`.
+# kind: absent  -> atlas_lookup must return no match (and, with `reason`, quote the release's).
+#
+# e2e:          for the end-to-end run through the assistant (llama3.1:8b): strings the
+#               answer must contain (id, label, value), and strings it must not.
+
+release: "0.22.0"
+questions:
+  - id: name-1
+    question: What is the refractive index of Silicon dioxide (fused silica) at 633 nm?
+    kind: lookup
+    material: Silicon dioxide (fused silica)
+    quantity: n_633nm
+    notes: [material.oxides_50.sio2-amorphous]
+    values: [{quantity: n_633nm, value: 1.457012124643149, grade: C, scope: "structure:amorphous"}]
+    e2e: {contains: ["38", "1.457"], absent: []}
+
+  - id: synonym-fused-silica
+    question: What is n of fused silica at 633 nm, and how good is the evidence?
+    kind: lookup
+    material: fused silica
+    quantity: n_633nm
+    notes: [material.oxides_50.sio2-amorphous]
+    values: [{quantity: n_633nm, value: 1.457012124643149, grade: C}]
+    e2e: {contains: ["38", "1.457", "C"], absent: []}
+
+  - id: synonym-galena
+    question: What is the density of galena, and is it measured?
+    kind: lookup
+    material: galena
+    quantity: density
+    notes: [material.batch2_31.pbs-rock-salt]
+    values: [{quantity: density, value: 7.445972223397738, kind: calculated_dft}]
+    e2e: {contains: ["77", "7.44", "DFT"], absent: []}
+
+  - id: formula-C-two-materials
+    question: What is the density of C?
+    kind: lookup
+    material: C
+    quantity: density
+    notes: [material.batch3b_4.c-diamond-cubic, material.batch3b_4.c-graphite]
+    ambiguous: true
+    values:
+      - {quantity: density, value: 3.534148102771878, kind: calculated_dft}
+      - {quantity: density, value: 2.267, kind: calculated_from_lattice}
+    e2e: {contains: ["Diamond", "Graphite"], absent: []}
+
+  - id: formula-propanol
+    question: What is the refractive index of C3H7OH at 633 nm?
+    kind: lookup
+    material: C3H7OH
+    quantity: n_633nm
+    notes: [material.liquids.2-c3h7oh, material.liquids.1-c3h7oh]
+    ambiguous: true
+    e2e: {contains: ["2-Propanol", "1-Propanol", "1.3757", "1.3824"], absent: []}
+
+  - id: formula-TiO2-rutile-only
+    question: What is n of TiO2 at 633 nm? Is there anatase data?
+    kind: lookup
+    material: TiO2
+    quantity: n_633nm
+    notes: [material.oxides_50.tio2-rutile]
+    values:
+      - {quantity: n_633nm, value: 2.871754462248865, scope: "rutile | e-ray", grade: C}
+      - {quantity: n_633nm, value: 2.583580193185641, scope: "rutile | o-ray", grade: C}
+    e2e: {contains: ["42", "rutile", "2.87", "2.58"], absent: []}
+
+  - id: cas
+    question: Which material has CAS 60676-86-0, and what is its density?
+    kind: lookup
+    material: 60676-86-0
+    quantity: density
+    notes: [material.oxides_50.sio2-amorphous]
+    values: [{quantity: density, value: 2.2, kind: literature}]
+    e2e: {contains: ["fused silica", "2.2"], absent: []}
+
+  - id: property-As2S3-density
+    question: What is the density of As2S3 and where does it come from?
+    kind: lookup
+    material: As2S3
+    quantity: density
+    notes: [material.batch2_31.as2s3-amorphous]
+    values: [{quantity: density, value: 3.2, kind: literature, label: "structure:amorphous | density_literature"}]
+    e2e: {contains: ["72", "3.2", "AMTIR"], absent: []}
+
+  - id: limit-k-fused-silica
+    question: Is k measured for fused silica?
+    kind: lookup
+    material: fused silica
+    quantity: k_status
+    notes: [material.oxides_50.sio2-amorphous]
+    values: [{quantity: k_status, status: not_measured}]
+    e2e: {contains: ["not measured"], absent: ["k = 0", "k=0", "k is 0", "zero"]}
+
+  - id: model-fit-only-CdTe
+    question: What is n of CdTe at 633 nm, and is it measured?
+    kind: lookup
+    material: CdTe
+    quantity: n_633nm
+    notes: [material.semiconductors.cdte]
+    values: [{quantity: n_633nm, grade: D, basis: primary_dataset_point}]
+    e2e: {contains: ["316", "model"], absent: []}
+
+  - id: single-source-As2S3
+    question: How many sources give n of arsenic trisulfide at 633 nm?
+    kind: lookup
+    material: Arsenic trisulfide
+    quantity: n_633nm
+    notes: [material.batch2_31.as2s3-amorphous]
+    values: [{quantity: n_633nm, value: 2.6059860281547222, grade: C, classification: single_source}]
+    e2e: {contains: ["2.605"], any_of: [["one", "1 source", "single"]], absent: []}
+
+  - id: suspicious-As2Se3-k
+    question: Do the sources agree on k of As2Se3 at 633 nm?
+    kind: lookup
+    material: As2Se3
+    quantity: k_633nm
+    notes: [material.chalcogenides.as2se3]
+    values: [{quantity: k_633nm, value: 0.30614666666666685, classification: suspicious}]
+    e2e: {contains: ["suspicious"], any_of: [["disagree", "do not agree", "don't agree"]], absent: ["sources agree", "values agree"]}
+
+  - id: catalog-glass-maker-code
+    question: What is the density of N-BK7HT?
+    kind: lookup
+    material: N-BK7HT
+    quantity: density
+    notes: [material.glass_catalogs.schott-optical-n-bk7ht]
+    values: [{quantity: density, value: 2.51, kind: literature}]
+    e2e: {contains: ["SCHOTT", "2.51"], absent: []}
+
+  - id: water-grade-A
+    question: How well established is n of liquid water at 633 nm?
+    kind: lookup
+    material: Water
+    quantity: n_633nm
+    notes: [material.liquids.h2o]
+    values:
+      - {quantity: n_633nm, value: 1.331790355084919, scope: liquid, grade: A}
+      - {quantity: n_633nm, scope: ice, grade: T}
+    e2e: {contains: ["232", "1.33", "A"], absent: []}
+
+  - id: gaas
+    question: What does the atlas give for n of GaAs at 633 nm?
+    kind: lookup
+    material: GaAs
+    quantity: n_633nm
+    notes: [material.semiconductors.gaas]
+    values: [{quantity: n_633nm, value: 3.8468, classification: excellent}]
+    e2e: {contains: ["310", "3.8468"], absent: []}
+
+  - id: contested-CuGaS2
+    question: What is the e-ray index of copper gallium sulfide at 633 nm?
+    kind: lookup
+    material: Copper gallium sulfide
+    quantity: n_633nm
+    notes: [material.chalcogenides.cugas2]
+    values: [{quantity: n_633nm, value: 2.6784894017828003, scope: e-ray, grade: C}]
+    e2e: {contains: ["219", "120"], absent: []}
+
+  - id: compare-diamond-graphite
+    question: Compare the densities of diamond and graphite.
+    kind: lookup
+    material: Diamond
+    quantity: density
+    notes: [material.batch3b_4.c-diamond-cubic]
+    values: [{quantity: density, value: 3.534148102771878, kind: calculated_dft}]
+    e2e: {contains: ["3.53", "2.267"], absent: []}
+
+  - id: absent-InN
+    question: What is the refractive index of indium nitride?
+    kind: absent
+    material: Indium nitride
+    quantity: n_633nm
+    reason: no RI.info dataset
+    e2e: {contains: ["not"], absent: ["2.9", "2.8", "3.0"]}
+
+  - id: absent-unobtainium
+    question: What is the density of unobtainium?
+    kind: absent
+    material: unobtainium
+    quantity: density
+    e2e: {contains: ["DATA GAP"], absent: []}
+
+  - id: search-name
+    question: fused silica
+    kind: search
+    query: fused silica
+    notes: [material.oxides_50.sio2-amorphous]
+
+  - id: search-author
+    question: Which atlas materials cite Malitson 1965?
+    kind: search
+    query: Malitson 1965 fused silica
+    notes: [material.oxides_50.sio2-amorphous, source.45]
+
+  - id: search-water
+    question: refractive index of water
+    kind: search
+    query: refractive index water
+    notes: [material.liquids.h2o]
+
+  - id: search-amtir
+    question: AMTIR-6 datasheet density
+    kind: search
+    query: AMTIR-6 density
+    notes: [material.batch2_31.as2s3-amorphous, source.76]
+
+  - id: search-liquid-argon
+    question: liquid argon refractive index
+    kind: search
+    query: liquid argon
+    notes: [material.gases.ar]
+
+  - id: search-adachi
+    question: Adachi model fit CdTe
+    kind: search
+    query: CdTe Adachi model fit
+    notes: [material.semiconductors.cdte]
+
+  - id: search-n-bk7ht
+    question: SCHOTT N-BK7HT
+    kind: search
+    query: SCHOTT N-BK7HT
+    notes: [material.glass_catalogs.schott-optical-n-bk7ht]
+
+  - id: search-rutile-o-ray
+    question: rutile o-ray
+    kind: search
+    query: rutile o-ray
+    notes: [material.oxides_50.tio2-rutile]
+
+  - id: search-gaas-temperature
+    question: GaAs refractive index at high temperature
+    kind: search
+    query: GaAs temperature
+    notes: [material.semiconductors.gaas]
+
+  - id: search-cas
+    question: 7440-37-1
+    kind: search
+    query: 7440-37-1
+    notes: [material.gases.ar]
+
+  - id: search-galena
+    question: galena
+    kind: search
+    query: galena
+    notes: [material.batch2_31.pbs-rock-salt]

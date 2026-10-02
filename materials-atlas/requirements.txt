@@ -1,0 +1,5 @@
+# materials-atlas generator. The CNMS package (pip install -e ".[dev,atlas]" from the
+# repository root) provides cnms_fom.materials_release; these are what the generator adds.
+numpy>=1.26
+pandas>=2.2      # imported by materials-db's primary_pages() helper
+pyyaml>=6.0      # materials-db's dataset_kind.py helper, and the checks
