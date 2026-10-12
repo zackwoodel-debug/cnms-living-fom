@@ -17,13 +17,17 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from test_api_modalfit import EXPORT
 
 from cnms_fom.db.base import Base, get_db
-from cnms_fom.db.models import DescriptorValue, Material, PropertyValue  # noqa: F401 - registers mappers
+from cnms_fom.db.models import (  # noqa: F401 - registers mappers
+    DescriptorValue,
+    Material,
+    PropertyValue,
+)
 from cnms_fom.main import app
 from cnms_fom.routers import suite as suite_router
 from cnms_fom.suite.client import MaterialsDbClient
-from test_api_modalfit import EXPORT
 
 REC = json.loads((Path(__file__).parent / "fixtures" / "suite" / "recorded.json").read_text())
 GOLD = REC["_ids"]["gold"]
@@ -148,8 +152,9 @@ def test_reference_values_never_reach_the_measured_store_through_the_suite_route
     client.get(f"/suite/materials/{GOLD}/evidence")
     client.post("/suite/readiness", json={"selection": {"material_id": GOLD}, "technique": "XRR"})
     client.post("/suite/bundle", json={"layers": [{"material": "Gold", "thickness": 50.0}], "techniques": ["XRR"]})
-    from cnms_fom.routers import suite as s
     import inspect
+
+    from cnms_fom.routers import suite as s
     assert "PropertyValue" not in inspect.getsource(s) and "promote_fit" not in inspect.getsource(s)
 
 
