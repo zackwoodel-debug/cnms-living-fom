@@ -1,0 +1,702 @@
+{
+ "_ids": {
+  "gold": 3,
+  "silica": 1
+ },
+ "bundle_ok": {
+  "status": 200,
+  "summary": {
+   "assumptions_used": [],
+   "layers": [
+    {
+     "label": "Air",
+     "layer_id": "L00",
+     "role": "ambient"
+    },
+    {
+     "label": "Au",
+     "layer_id": "L01",
+     "role": "layer"
+    },
+    {
+     "label": "Si",
+     "layer_id": "L02",
+     "role": "substrate"
+    }
+   ],
+   "mode": "strict",
+   "n_layers": 1,
+   "source_db": {
+    "contract_layer": true,
+    "file": "fixture.sqlite",
+    "release": null,
+    "sha256": "d37659c57b4a70120763b1946b287597bb3a5406606f1a52a11399bb65a721a3"
+   },
+   "stack_id": "materials_db_export",
+   "techniques": [
+    "XRR"
+   ]
+  },
+  "zip_b64": "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"
+ },
+ "bundle_refused": {
+  "detail": "'Fused silica' has 2 optical datasets and none was chosen: 'Kitamura2007' (source 2, doi 10.1000/b, 5 points, 400.0-800.0 nm, axis none stated, 0 without k); 'Malitson1965' (source 1, doi 10.1000/a, 5 points, 400.0-800.0 nm, axis none stated, 5 without k). Choose one with dataset_label=..., or use mode='exploratory' with assumptions=('axis_default',).",
+  "status": 422
+ },
+ "evidence_gold": {
+  "datasets": [
+   {
+    "basis": "dataset_kind:measured_page",
+    "conditions": {
+     "direction": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "energy": {
+      "state": "not_applicable",
+      "unit": null,
+      "value": null
+     },
+     "frequency": {
+      "state": "not_applicable",
+      "unit": null,
+      "value": null
+     },
+     "isotope": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "method": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "phase": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "polarization": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "processing": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "specimen_form": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "structure": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "substrate": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "temperature": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "thickness": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "wavelength": {
+      "state": "not_applicable",
+      "unit": null,
+      "value": null
+     }
+    },
+    "dataset_id": 21,
+    "family": "optical",
+    "label": "Johnson1972",
+    "open_findings": [],
+    "optical": {
+     "k_missing_rows": 0,
+     "rows": 7,
+     "wavelength_nm": [
+      300.0,
+      900.0
+     ]
+    },
+    "provenance": "measured",
+    "raw_file": "main/3/Johnson1972.yml",
+    "raw_sha256": null,
+    "review": {
+     "by": [],
+     "conflict": false,
+     "status": "unreviewed"
+    },
+    "source": {
+     "authors": null,
+     "doi": "10.1000/c",
+     "title": "Handbook C",
+     "year": 1972
+    }
+   },
+   {
+    "basis": "label_rule:density_literature",
+    "conditions": {
+     "direction": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "energy": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "frequency": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "isotope": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "method": {
+      "state": "stated",
+      "unit": null,
+      "value": "literature"
+     },
+     "phase": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "polarization": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "processing": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "specimen_form": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "structure": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "substrate": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "temperature": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "thickness": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "wavelength": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     }
+    },
+    "dataset_id": 22,
+    "family": "physical",
+    "label": "density_literature",
+    "open_findings": [],
+    "optical": null,
+    "provenance": "reported",
+    "raw_file": null,
+    "raw_sha256": null,
+    "review": {
+     "by": [],
+     "conflict": false,
+     "status": "unreviewed"
+    },
+    "source": {
+     "authors": null,
+     "doi": "10.1000/a",
+     "title": "Paper A",
+     "year": 1965
+    }
+   },
+   {
+    "basis": "label_rule:periodictable",
+    "conditions": {
+     "direction": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "energy": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "frequency": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "isotope": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "method": {
+      "state": "stated",
+      "unit": null,
+      "value": "periodictable_thermal"
+     },
+     "phase": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "polarization": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "processing": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "specimen_form": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "structure": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "substrate": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "temperature": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "thickness": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "wavelength": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     }
+    },
+    "dataset_id": 23,
+    "family": "physical",
+    "label": "neutron_sld_imag | periodictable_thermal",
+    "open_findings": [],
+    "optical": null,
+    "provenance": "calculated",
+    "raw_file": null,
+    "raw_sha256": null,
+    "review": {
+     "by": [],
+     "conflict": false,
+     "status": "unreviewed"
+    },
+    "source": {
+     "authors": null,
+     "doi": "10.1000/a",
+     "title": "Paper A",
+     "year": 1965
+    }
+   },
+   {
+    "basis": "label_rule:periodictable",
+    "conditions": {
+     "direction": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "energy": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "frequency": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "isotope": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "method": {
+      "state": "stated",
+      "unit": null,
+      "value": "periodictable_thermal"
+     },
+     "phase": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "polarization": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "processing": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "specimen_form": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "structure": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "substrate": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "temperature": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "thickness": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "wavelength": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     }
+    },
+    "dataset_id": 24,
+    "family": "physical",
+    "label": "neutron_sld_real | periodictable_thermal",
+    "open_findings": [],
+    "optical": null,
+    "provenance": "calculated",
+    "raw_file": null,
+    "raw_sha256": null,
+    "review": {
+     "by": [],
+     "conflict": false,
+     "status": "unreviewed"
+    },
+    "source": {
+     "authors": null,
+     "doi": "10.1000/a",
+     "title": "Paper A",
+     "year": 1965
+    }
+   },
+   {
+    "basis": "label_rule:periodictable",
+    "conditions": {
+     "direction": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "energy": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "frequency": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "isotope": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "method": {
+      "state": "stated",
+      "unit": null,
+      "value": "periodictable_CuKalpha"
+     },
+     "phase": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "polarization": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "processing": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "specimen_form": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "structure": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "substrate": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "temperature": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "thickness": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "wavelength": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     }
+    },
+    "dataset_id": 25,
+    "family": "physical",
+    "label": "xray_sld_imag | periodictable_CuKalpha",
+    "open_findings": [],
+    "optical": null,
+    "provenance": "calculated",
+    "raw_file": null,
+    "raw_sha256": null,
+    "review": {
+     "by": [],
+     "conflict": false,
+     "status": "unreviewed"
+    },
+    "source": {
+     "authors": null,
+     "doi": "10.1000/a",
+     "title": "Paper A",
+     "year": 1965
+    }
+   },
+   {
+    "basis": "label_rule:periodictable",
+    "conditions": {
+     "direction": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "energy": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "frequency": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "isotope": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "method": {
+      "state": "stated",
+      "unit": null,
+      "value": "periodictable_CuKalpha"
+     },
+     "phase": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "polarization": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "processing": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "specimen_form": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "structure": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "substrate": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "temperature": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "thickness": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     },
+     "wavelength": {
+      "state": "not_recorded",
+      "unit": null,
+      "value": null
+     }
+    },
+    "dataset_id": 26,
+    "family": "physical",
+    "label": "xray_sld_real | periodictable_CuKalpha",
+    "open_findings": [],
+    "optical": null,
+    "provenance": "calculated",
+    "raw_file": null,
+    "raw_sha256": null,
+    "review": {
+     "by": [],
+     "conflict": false,
+     "status": "unreviewed"
+    },
+    "source": {
+     "authors": null,
+     "doi": "10.1000/a",
+     "title": "Paper A",
+     "year": 1965
+    }
+   }
+  ],
+  "material": {
+   "formula": "Au",
+   "material_id": 3,
+   "name": "Gold"
+  }
+ },
+ "info": {
+  "datasets": 67,
+  "datasets_by_provenance": {
+   "calculated": 45,
+   "measured": 11,
+   "reported": 11
+  },
+  "materials": 10,
+  "provenance_vocabulary": [
+   "measured",
+   "fitted",
+   "calculated",
+   "modeled",
+   "reported",
+   "unknown"
+  ],
+  "reviews": 0,
+  "sqlite_sha256": null,
+  "techniques": [
+   "SE",
+   "SPR",
+   "XRR",
+   "NR",
+   "QCM"
+  ],
+  "version": "fixture"
+ },
+ "materials_gold": [
+  {
+   "datasets_by_family": {
+    "optical": 1,
+    "physical": 5
+   },
+   "datasets_by_provenance": {
+    "calculated": 4,
+    "measured": 1,
+    "reported": 1
+   },
+   "formula": "Au",
+   "material_id": 3,
+   "name": "Gold"
+  }
+ ],
+ "readiness_gold_xrr": {
+  "candidates": [],
+  "datasets": [
+   26
+  ],
+  "excluded": [],
+  "notes": [
+   {
+    "code": "unreviewed",
+    "dataset_id": 26,
+    "detail": null,
+    "message": "no one has reviewed this dataset"
+   },
+   {
+    "code": "provenance",
+    "dataset_id": 26,
+    "detail": null,
+    "message": "calculated: label_rule:periodictable"
+   }
+  ],
+  "reasons": [],
+  "status": "ready",
+  "unchecked": [
+   "temperature",
+   "direction",
+   "phase",
+   "structure",
+   "energy"
+  ]
+ },
+ "readiness_silica_se_refused": {
+  "detail": "SE needs a wavelength_nm window"
+ }
+}

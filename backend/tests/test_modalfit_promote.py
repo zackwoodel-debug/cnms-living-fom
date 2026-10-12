@@ -108,7 +108,7 @@ def test_substrate_layers_are_never_promoted(db):
 
 def test_promotion_writes_measured_rows_with_context(db, material):
     fit_id = _import(db)
-    result = promote_fit(db, fit_id, material_id=material.id, temperature_k=300.0, dry_run=False)
+    result = promote_fit(db, fit_id, material_id=material.id, temperature_k=300.0, dry_run=False, operator="test-operator")
     db.commit()
 
     assert result["written"] == 2
@@ -121,7 +121,7 @@ def test_promotion_writes_measured_rows_with_context(db, material):
     assert sld.thickness_nm == pytest.approx(10.34)
     assert sld.substrate == "Si"
     assert "Nevot-Croce" in sld.interface
-    assert sld.source_locator == f"fit_record:{fit_id}"
+    assert sld.source_locator == f"fit_record:{fit_id};promoted_by:test-operator"
     #  The registry requires `method`, and says why: X-ray SLD is energy-dependent.
     assert "8.04 keV" in sld.method
     assert "L-BFGS-B" in sld.method
@@ -141,7 +141,7 @@ def test_dry_run_writes_nothing(db, material):
 def test_missing_material_is_refused_not_invented(db):
     """Sec. 2.1: the importer does not get to guess a polymorph."""
     with pytest.raises(PromotionRefused, match="polymorph"):
-        promote_fit(db, _import(db), material_id=999, dry_run=False)
+        promote_fit(db, _import(db), material_id=999, dry_run=False, operator="test-operator")
 
 
 def test_a_clamped_parameter_is_refused(db, material):
@@ -196,11 +196,11 @@ def test_ambiguous_film_layer_is_refused_rather_than_chosen(db, material):
     fit_id = _import(db, payload)
 
     with pytest.raises(PromotionRefused, match="refusing to guess|Refusing to guess"):
-        promote_fit(db, fit_id, material_id=material.id, dry_run=False)
+        promote_fit(db, fit_id, material_id=material.id, dry_run=False, operator="test-operator")
 
     #  Naming the layer resolves it.
     result = promote_fit(
-        db, fit_id, material_id=material.id, layer_label="interlayer", dry_run=False
+        db, fit_id, material_id=material.id, layer_label="interlayer", dry_run=False, operator="test-operator"
     )
     db.commit()
     assert result["written"] >= 1
@@ -211,7 +211,7 @@ def test_promotion_is_not_the_retrieval_path(db, material):
     """The RAG guard still refuses, and promotion does not route through it."""
     from cnms_fom.rag_backend.chains import assert_not_property_ingestion
 
-    result = promote_fit(db, _import(db), material_id=material.id, dry_run=False)
+    result = promote_fit(db, _import(db), material_id=material.id, dry_run=False, operator="test-operator")
     db.commit()
     assert result["provenance_tier"] == "measured"
 
@@ -222,3 +222,23 @@ def test_promotion_is_not_the_retrieval_path(db, material):
 def test_unknown_fit_id_raises_lookup_error(db, material):
     with pytest.raises(LookupError):
         promote_fit(db, 4242, material_id=material.id, dry_run=True)
+
+
+def test_a_real_promotion_without_an_operator_is_refused_and_writes_nothing(db, material):
+    from cnms_fom.db.models import PropertyValue
+    fit_id = _import(db)
+    before = db.query(PropertyValue).count()
+    for who in (None, "", "   "):
+        with pytest.raises(PromotionRefused, match="operator"):
+            promote_fit(db, fit_id, material_id=material.id, dry_run=False, operator=who)
+    assert db.query(PropertyValue).count() == before
+    promote_fit(db, fit_id, material_id=material.id, dry_run=True)                 # a preview needs no operator
+    assert db.query(PropertyValue).count() == before
+
+
+def test_the_operator_is_recorded_on_every_promoted_row(db, material):
+    from cnms_fom.db.models import PropertyValue
+    result = promote_fit(db, _import(db), material_id=material.id, temperature_k=300.0, dry_run=False, operator="  zackwoodel-debug ")
+    assert result["operator"] == "zackwoodel-debug" and result["written"] > 0
+    rows = db.query(PropertyValue).filter(PropertyValue.software == "ModalFit").all()
+    assert rows and all(r.source_locator.endswith(";promoted_by:zackwoodel-debug") for r in rows)

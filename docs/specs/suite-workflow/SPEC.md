@@ -1,6 +1,6 @@
 # SPEC: first integrated suite workflow (Prompt 4, vertical slice)
 
-Status: **draft for approval**. Nothing is implemented. Inputs: `docs/suite-integration-audit.md`, `tasks/provenance-capability-map.md`, the materials-db contracts (provenance 0.23/0.24, strict ModalFit export + bundles, readiness).
+Status: **approved by the maintainer 2026-10-12; slice implemented** (see `docs/SUITE_WORKFLOW.md`). Decisions: `frontend/` is the home; Au on SiO2/Si for XRR/NR and a 2D material for SE; the CNMS backend reads reference data over HTTP from a materials-db service (local, or the full database on a remote host through an SSH tunnel), not from the release file. Inputs: `docs/suite-integration-audit.md`, `tasks/provenance-capability-map.md`, the materials-db contracts (provenance 0.23/0.24, strict ModalFit export + bundles, readiness).
 
 ## Objective
 One working path, in one existing application, from a reference material to a promoted fit, in which every number says where it came from and nothing becomes a measured property unless a person previews and confirms it.
@@ -56,4 +56,4 @@ S1 backend: release reader endpoints for evidence + readiness (reuse, thin). S2 
 ## Open questions
 1. Is `frontend/` the right home? (my recommendation: yes.)
 2. Which materials/technique should the fixture and the hand demo use? (suggestion: Au on SiO2/Si, XRR/NR, since those have full density/SLD coverage; SE with a TMD from batch A as the second demo.)
-3. Should materials-db be a Python dependency of the CNMS backend (import the readiness code) or read through the release file only? (recommendation: release file only for the slice; the readiness result is already stored in the release's provenance tables? -- **to verify**: today readiness is computed by materials-db code, not stored.)
+3. (decided: HTTP service, see above) Should materials-db be a Python dependency of the CNMS backend (import the readiness code) or read through the release file only? (recommendation: release file only for the slice; the readiness result is already stored in the release's provenance tables? -- **to verify**: today readiness is computed by materials-db code, not stored.)

@@ -116,6 +116,10 @@ class Settings(BaseSettings):
     materials_atlas_release: str = "0.22.0"
     #  Where `cnms-fom atlas build` reads the release from.
     materials_db_release_dir: str = "~/code/materials-db/release/materials-db-v0.22.0"
+    #  The materials-db service the suite workflow reads (its /suite routes). Local, or an SSH tunnel to the host that holds the full database:
+    #  `ssh -L 8000:localhost:8000 <host>`. Read-only; this platform never writes to it.
+    materials_db_url: str = "http://127.0.0.1:8000"
+    materials_db_timeout_s: float = 30.0
 
     # --- API --------------------------------------------------------------
     api_host: str = "0.0.0.0"

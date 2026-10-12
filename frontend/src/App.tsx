@@ -8,8 +8,10 @@ import FomPage from "./pages/FomPage";
 import MaterialDetailPage from "./pages/MaterialDetailPage";
 import MaterialsPage from "./pages/MaterialsPage";
 import MediationPage from "./pages/MediationPage";
+import WorkflowPage from "./pages/WorkflowPage";
 
 const TABS = [
+  { to: "/workflow", label: "Workflow" },
   { to: "/materials", label: "Materials" },
   { to: "/fom", label: "Figures of merit" },
   { to: "/mediation", label: "Mediated effects" },
@@ -50,6 +52,7 @@ export default function App() {
 
       <Routes>
         <Route path="/" element={<Navigate to="/materials" replace />} />
+        <Route path="/workflow" element={<WorkflowPage />} />
         <Route path="/materials" element={<MaterialsPage />} />
         <Route path="/materials/:id" element={<MaterialDetailPage />} />
         <Route path="/fom" element={<FomPage />} />

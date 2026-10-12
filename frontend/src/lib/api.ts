@@ -238,6 +238,100 @@ export interface RagAnswer {
 /* Endpoints                                                                */
 /* ----------------------------------------------------------------------- */
 
+
+/* ----------------------------------------------------------------------- */
+/* Suite workflow (docs/specs/suite-workflow/SPEC.md)                       */
+/* ----------------------------------------------------------------------- */
+
+export type BadgeKind =
+  | "reference_literature"
+  | "user_assumption"
+  | "calculated"
+  | "synthetic_prediction"
+  | "experimental_fit"
+  | "unknown";
+
+export interface SuiteMaterial {
+  material_id: number;
+  name: string;
+  formula: string | null;
+  datasets_by_provenance: Record<string, number>;
+  datasets_by_family: Record<string, number>;
+}
+
+export interface SuiteDataset {
+  dataset_id: number;
+  family: string;
+  label: string;
+  provenance: string;
+  basis: string;
+  review: { status: string; conflict: boolean; by: string[] };
+  source: { doi: string | null; title: string | null; authors: string | null; year: number | null } | null;
+  raw_file: string | null;
+  conditions: Record<string, { state: string; value: string | number | null; unit: string | null }>;
+  optical: { wavelength_nm: [number, number]; rows: number; k_missing_rows: number } | null;
+  open_findings: { finding_id: number; severity: string | null; code: string | null; message: string | null }[];
+  cnms: { label: string; tier: string | null; destination: string; reviewed: boolean; reasons: string[]; kind: BadgeKind };
+}
+
+export interface SuiteEvidence {
+  material: { material_id: number; name: string; formula: string | null };
+  datasets: SuiteDataset[];
+}
+
+export interface SuiteReadiness {
+  status: "ready" | "not_ready" | "ambiguous";
+  reasons: { code: string; message: string; dataset_id: number | null }[];
+  notes: string[];
+  datasets: number[];
+  excluded: { dataset_id: number; label: string; code: string; message: string }[];
+  unchecked: string[];
+}
+
+export interface SuiteLayer {
+  material: string;
+  dataset_label?: string;
+  thickness?: number;
+  roughness?: number;
+}
+
+export interface BundleRequest {
+  layers: SuiteLayer[];
+  substrate: string;
+  techniques: string[];
+  window?: { wavelength_nm: [number, number] } | null;
+  mode: "strict";
+  assumptions: string[];
+  length_unit: "angstrom";
+}
+
+export interface FitImported {
+  fit_record_id: number;
+  sample_id: string | null;
+  techniques: string[];
+  chi2_total: number | null;
+  n_free_parameters: number | null;
+  skipped: boolean;
+  warnings: string[];
+}
+
+export interface FitDiagnostics {
+  fit_record_id: number;
+  blocks_promotion: boolean;
+  findings: { code: string; severity: "blocks_promotion" | "caution" | "info"; message: string }[];
+}
+
+export interface PromotionResult {
+  fit_record_id: number;
+  material_id: number;
+  written: number;
+  operator?: string;
+  eligible?: { registry_key: string; parameter: string; value: number; units: string; layer_index: number }[];
+  refused: { registry_key?: string; parameter?: string; reason?: string; layer_index?: number }[];
+  created?: unknown[];
+  provenance_tier?: string;
+}
+
 export const api = {
   health: () => get<{ status: string; version: string }>("/health"),
   ready: () => get<{ status: string; checks: Record<string, any> }>("/health/ready"),
@@ -261,6 +355,37 @@ export const api = {
     reference_properties?: Record<string, number>;
     reference_descriptors?: Record<string, number>;
   }) => post<MediationResponse>("/fom/mediate", body),
+
+  suiteInfo: () => get<{ version: string; materials: number; datasets: number; reviews: number; datasets_by_provenance: Record<string, number> }>("/suite/info"),
+  suiteMaterials: (q: string) => get<SuiteMaterial[]>(`/suite/materials?q=${encodeURIComponent(q)}&limit=50`),
+  suiteEvidence: (id: number) => get<SuiteEvidence>(`/suite/materials/${id}/evidence`),
+  suiteReadiness: (body: {
+    selection: { material_id?: number; dataset_id?: number };
+    technique: string;
+    window?: { wavelength_nm: [number, number] } | null;
+    conditions?: Record<string, unknown> | null;
+  }) => post<SuiteReadiness>("/suite/readiness", body),
+  /** A strict ModalFit bundle. A refusal arrives as an ApiError whose message is the exporter's reason. */
+  suiteBundle: async (body: BundleRequest): Promise<{ blob: Blob; summary: Record<string, unknown> }> => {
+    const response = await fetch(`${BASE}/suite/bundle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      const detail = (await response.json().catch(() => ({})))?.detail;
+      throw new ApiError(typeof detail === "string" ? detail : `Request failed (${response.status})`, response.status, detail);
+    }
+    const summary = JSON.parse(response.headers.get("x-bundle-summary") ?? "{}");
+    return { blob: await response.blob(), summary };
+  },
+  importFit: (body: { path: string; operator?: string }) =>
+    post<{ imported: FitImported[]; warnings: string[] }>("/modalfit/import", body),
+  fitDiagnostics: (id: number) => get<FitDiagnostics>(`/suite/fits/${id}/diagnostics`),
+  promote: (
+    id: number,
+    body: { material_id: number; layer_label?: string; temperature_k?: number; dry_run: boolean; operator?: string },
+  ) => post<PromotionResult>(`/modalfit/fits/${id}/promote`, body),
 
   listBoRuns: () => get<BoRun[]>("/bo/runs"),
   suggest: (runId: number, q = 1) =>

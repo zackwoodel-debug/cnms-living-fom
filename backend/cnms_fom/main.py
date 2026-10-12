@@ -24,6 +24,7 @@ from cnms_fom.routers import (
     pysea,
     rag,
     research,
+    suite,
 )
 
 logger = logging.getLogger(__name__)
@@ -164,6 +165,7 @@ app.include_router(cards.router)
 app.include_router(research.router)
 app.include_router(bo.router)
 app.include_router(pilot.router)
+app.include_router(suite.router)
 
 
 @app.get("/", tags=["health"])

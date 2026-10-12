@@ -163,6 +163,10 @@ class PromoteRequest(BaseModel):
     layer_label: str | None = None
     temperature_k: float | None = Field(default=None, gt=0)
     substrate: str | None = None
+    operator: str | None = Field(
+        default=None,
+        description="Who confirms this promotion. Required when dry_run is False and recorded on every row written.",
+    )
     dry_run: bool = Field(
         default=True,
         description="True (the default) reports what would be written and what is refused, "

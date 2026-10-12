@@ -210,6 +210,7 @@ def promote_fit(
     temperature_k: float | None = None,
     substrate: str | None = None,
     dry_run: bool = False,
+    operator: str | None = None,
 ) -> dict:
     """Promote the eligible fitted values of one fit for one material.
 
@@ -224,6 +225,11 @@ def promote_fit(
     """
     from cnms_fom.db.models import DescriptorValue, FitRecord, Material, PropertyValue
 
+    if not dry_run and not (operator or "").strip():
+        raise PromotionRefused(
+            "Promotion writes MEASURED rows and needs the name of the person who confirmed it (operator). "
+            "Run with dry_run=True first to preview what would be written."
+        )
     record = session.get(FitRecord, fit_record_id)
     if record is None:
         raise LookupError(f"No fit record {fit_record_id}.")
@@ -292,7 +298,7 @@ def promote_fit(
                 method=method,
                 software="ModalFit",
                 provenance_tier=ProvenanceTier.MEASURED,
-                source_locator=f"fit_record:{record.id}",
+                source_locator=f"fit_record:{record.id};promoted_by:{operator.strip()}",
                 database_identifier=record.datafed_record_id,
                 ingested_at=datetime.now(timezone.utc),
                 experiment_id=record.experiment_id,
@@ -326,6 +332,7 @@ def promote_fit(
         "fit_record_id": record.id,
         "material_id": material_id,
         "written": written,
+        "operator": operator.strip(),
         "created": created,
         "refused": refused,
         "provenance_tier": ProvenanceTier.MEASURED.value,
