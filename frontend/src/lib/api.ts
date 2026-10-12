@@ -288,6 +288,31 @@ export interface SuiteReadiness {
   unchecked: string[];
 }
 
+export interface OpticalHit {
+  material_id: number;
+  material: string;
+  dataset_id: number;
+  label: string;
+  provenance: string;
+  review: string;
+  doi: string | null;
+  n: number | null;
+  k: number | null;
+  interpolated: boolean;
+  between_nm: [number, number] | null;
+  dataset_span_nm: [number, number];
+  cnms: { label: string; kind: BadgeKind; reviewed: boolean };
+}
+
+export interface OpticalSearchResult {
+  wavelength_nm: number;
+  results: OpticalHit[];
+  truncated: boolean;
+  datasets_spanning_wavelength: number;
+  skipped_without_k: number;
+  note: string;
+}
+
 export interface SuiteLayer {
   material: string;
   dataset_label?: string;
@@ -358,6 +383,10 @@ export const api = {
 
   suiteInfo: () => get<{ version: string; materials: number; datasets: number; reviews: number; datasets_by_provenance: Record<string, number> }>("/suite/info"),
   suiteMaterials: (q: string) => get<SuiteMaterial[]>(`/suite/materials?q=${encodeURIComponent(q)}&limit=50`),
+  opticalSearch: (p: Record<string, string | number | boolean | undefined>) => {
+    const query = new URLSearchParams(Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]));
+    return get<OpticalSearchResult>(`/suite/optical/search?${query}`);
+  },
   suiteEvidence: (id: number) => get<SuiteEvidence>(`/suite/materials/${id}/evidence`),
   suiteReadiness: (body: {
     selection: { material_id?: number; dataset_id?: number };

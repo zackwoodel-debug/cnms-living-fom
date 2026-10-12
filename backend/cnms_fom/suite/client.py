@@ -56,3 +56,6 @@ class MaterialsDbClient:
     def bundle(self, request: dict) -> tuple[bytes, dict]:
         response = self._request("POST", "/suite/bundle", json=request)
         return response.content, json.loads(response.headers.get("x-bundle-summary", "{}"))
+
+    def optical_search(self, **params) -> dict:
+        return self._request("GET", "/suite/optical/search", params={k: v for k, v in params.items() if v is not None}).json()

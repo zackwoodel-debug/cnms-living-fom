@@ -162,3 +162,19 @@ def test_a_fit_with_a_blocking_diagnostic_says_so(client, tmp_path):
     diag = client.get("/suite/fits/1/diagnostics").json()
     assert diag["blocks_promotion"] is True and any(x["code"] == "chi2_not_recorded" for x in diag["findings"])
     assert client.get("/suite/fits/999/diagnostics").status_code == 404
+
+
+def test_wavelength_search_is_proxied_filtered_and_labelled(client):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(dict(request.url.params))
+        return httpx.Response(200, json={"wavelength_nm": 633.0, "results": [{"material_id": 1, "material": "Gold", "dataset_id": 7, "label": "J", "provenance": "measured",
+                                                                               "review": "approved", "n": 0.2, "k": 3.1, "interpolated": True, "between_nm": [600, 650]}],
+                                         "truncated": False, "datasets_spanning_wavelength": 1, "skipped_without_k": 0, "note": "n"})
+
+    app.dependency_overrides[suite_router.get_client] = lambda: MaterialsDbClient("http://x", transport=httpx.MockTransport(handler))
+    r = client.get("/suite/optical/search", params={"wavelength_nm": 633, "k_min": 1.0, "approved_only": True})
+    assert r.status_code == 200 and seen["k_min"] == "1.0" and seen["approved_only"] == "true" and "n_min" not in seen
+    hit = r.json()["results"][0]
+    assert hit["cnms"] == {"label": "literature_measured (reviewed)", "kind": "reference_literature", "reviewed": True} and hit["interpolated"] is True

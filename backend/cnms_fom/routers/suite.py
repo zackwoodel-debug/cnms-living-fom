@@ -69,6 +69,28 @@ def evidence(material_id: int, client: MaterialsDbClient = Depends(get_client)) 
     return with_labels(_call(client.evidence, material_id))
 
 
+@router.get("/optical/search")
+def optical_search(
+    wavelength_nm: float,
+    n_min: float | None = None,
+    n_max: float | None = None,
+    k_min: float | None = None,
+    k_max: float | None = None,
+    q: str | None = None,
+    provenance: str | None = None,
+    approved_only: bool = False,
+    limit: int = 50,
+    client: MaterialsDbClient = Depends(get_client),
+) -> dict:
+    """Tabulated n and k at one wavelength, filtered by range. Interpolated values are flagged and nothing is extrapolated."""
+    result = _call(client.optical_search, wavelength_nm=wavelength_nm, n_min=n_min, n_max=n_max, k_min=k_min, k_max=k_max, q=q, provenance=provenance,
+                   approved_only=approved_only, limit=limit)
+    for hit in result["results"]:
+        mapped = map_evidence(EvidenceInput(dataset_id=hit["dataset_id"], provenance=hit["provenance"], review=hit["review"], review_conflict=False, states={}))
+        hit["cnms"] = dict(label=mapped.label, kind=_KIND[hit["provenance"]], reviewed=mapped.reviewed)
+    return result
+
+
 class ReadinessIn(BaseModel):
     selection: dict
     technique: str

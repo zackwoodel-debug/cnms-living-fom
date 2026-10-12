@@ -5,6 +5,7 @@ import {
   ApiError,
   api,
   type FitDiagnostics,
+  type OpticalSearchResult,
   type FitImported,
   type PromotionResult,
   type SuiteDataset,
@@ -56,6 +57,17 @@ export default function WorkflowPage() {
   const search = useAction((q: string) => api.suiteMaterials(q));
   const evidence = useAction((id: number) => api.suiteEvidence(id));
   const [selected, setSelected] = useState<SuiteMaterial | null>(null);
+
+  const [sWl, setSWl] = useState("633");
+  const [nMin, setNMin] = useState("");
+  const [nMax, setNMax] = useState("");
+  const [kMin, setKMin] = useState("");
+  const [kMax, setKMax] = useState("");
+  const [sApproved, setSApproved] = useState(false);
+  const optSearch = useAction(() =>
+    api.opticalSearch({ wavelength_nm: sWl, n_min: nMin, n_max: nMax, k_min: kMin, k_max: kMax, q: query || undefined, approved_only: sApproved || undefined, limit: 100 }),
+  );
+  const optical: OpticalSearchResult | null = optSearch.data;
 
   const [technique, setTechnique] = useState<string>("SE");
   const [lo, setLo] = useState("400");
@@ -173,6 +185,44 @@ export default function WorkflowPage() {
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+
+      <div className="panel">
+        <h2>1b. Search tabulated n and k at a wavelength</h2>
+        <p className="hint">
+          Optical constants depend on wavelength, so search where you will use them. Values between table points are interpolated and marked; nothing is extrapolated outside a
+          dataset's range. A k limit excludes datasets that report no k (they are counted, never treated as zero). The name box above narrows the search.
+        </p>
+        <form onSubmit={(e) => { e.preventDefault(); optSearch.run(); }}>
+          λ <input style={{ width: 70 }} value={sWl} onChange={(e) => setSWl(e.target.value)} /> nm · n from{" "}
+          <input style={{ width: 55 }} value={nMin} onChange={(e) => setNMin(e.target.value)} /> to <input style={{ width: 55 }} value={nMax} onChange={(e) => setNMax(e.target.value)} /> · k from{" "}
+          <input style={{ width: 55 }} value={kMin} onChange={(e) => setKMin(e.target.value)} /> to <input style={{ width: 55 }} value={kMax} onChange={(e) => setKMax(e.target.value)} />{" "}
+          <label><input type="checkbox" checked={sApproved} onChange={(e) => setSApproved(e.target.checked)} /> approved by a person only</label>{" "}
+          <button disabled={optSearch.busy}>Search</button>
+        </form>
+        <Refusal text={optSearch.error} />
+        {optical && (
+          <>
+            <p className="hint">
+              {optical.results.length}{optical.truncated ? "+" : ""} match(es) of {optical.datasets_spanning_wavelength} datasets that span {optical.wavelength_nm} nm
+              {optical.skipped_without_k ? `; ${optical.skipped_without_k} skipped because they report no k` : ""}.
+            </p>
+            <table>
+              <thead><tr><th>Kind</th><th>Material</th><th>Dataset</th><th>n</th><th>k</th><th>At λ</th><th>Source</th></tr></thead>
+              <tbody>
+                {optical.results.map((h) => (
+                  <tr key={h.dataset_id}>
+                    <td><KindBadge kind={h.cnms.kind} reviewStatus={h.review} /></td>
+                    <td>{h.material}</td><td>{h.label || "(unlabelled)"}</td>
+                    <td>{h.n?.toPrecision(4) ?? "—"}</td><td>{h.k?.toPrecision(3) ?? "not reported"}</td>
+                    <td>{h.interpolated ? `interpolated between ${h.between_nm?.[0]} and ${h.between_nm?.[1]} nm` : "tabulated point"}</td>
+                    <td>{h.doi ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
         )}
       </div>
 
