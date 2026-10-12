@@ -280,7 +280,23 @@ export interface SuiteEvidence {
   datasets: SuiteDataset[];
 }
 
+export interface ReadinessCandidate {
+  dataset_id: number;
+  label: string;
+  family: string;
+  provenance: string;
+  basis: string;
+  review: string;
+  ready: boolean;
+  reason_codes: string[];
+  source: { doi: string | null; title: string | null; notes: string } | null;
+  values?: { density_g_cm3: number | null; xray_sld: number | null; neutron_sld: number | null };
+  optical?: { wavelength_nm: [number, number]; rows: number };
+}
+
 export interface SuiteReadiness {
+  release?: string;
+  candidates: ReadinessCandidate[];
   status: "ready" | "not_ready" | "ambiguous";
   reasons: { code: string; message: string; dataset_id: number | null }[];
   notes: string[];
@@ -319,6 +335,7 @@ export interface SuiteLayer {
   release?: string;
   material: string;
   dataset_label?: string;
+  density_dataset_label?: string;
   thickness?: number;
   roughness?: number;
 }

@@ -8,7 +8,6 @@ import {
   type OpticalSearchResult,
   type FitImported,
   type PromotionResult,
-  type SuiteDataset,
   type SuiteEvidence,
   type SuiteLayer,
   type SuiteMaterial,
@@ -74,7 +73,8 @@ export default function WorkflowPage() {
   const [lo, setLo] = useState("400");
   const [hi, setHi] = useState("800");
   const [temperature, setTemperature] = useState("");
-  const [pickedDataset, setPickedDataset] = useState<SuiteDataset | null>(null);
+  const [pickedDataset, setPickedDataset] = useState<{ dataset_id: number; label: string } | null>(null);
+  const [densityLabel, setDensityLabel] = useState<string | null>(null);
   const readiness = useAction((mid: number, ds: number | null, release?: string) =>
     api.suiteReadiness({
       release,
@@ -188,6 +188,7 @@ export default function WorkflowPage() {
                       onClick={() => {
                         setSelected(m);
                         setPickedDataset(null);
+                        setDensityLabel(null);
                         readiness.run(m.material_id, null, m.release);
                         evidence.run(m.material_id, m.release);
                       }}
@@ -296,6 +297,33 @@ export default function WorkflowPage() {
               {ready.unchecked.length > 0 && <div className="hint">Not checked (you did not state them): {ready.unchecked.join(", ")}</div>}
             </div>
           )}
+          {ready && ready.status === "ambiguous" && ready.candidates.length > 0 && (
+            <div className="notice bad">
+              <strong>Which one do you want?</strong> {ready.candidates.length} datasets could serve {technique}. Nothing is chosen for you: pick the phase or dataset that matches your sample.
+              <table>
+                <thead><tr><th>Kind</th><th>Dataset</th><th>Value / range</th><th>Source</th><th /></tr></thead>
+                <tbody>
+                  {ready.candidates.map((c) => (
+                    <tr key={c.dataset_id}>
+                      <td>{c.family} · {c.provenance} · {c.review}</td>
+                      <td>{c.label || "(unlabelled)"}</td>
+                      <td>
+                        {c.values ? [c.values.density_g_cm3 != null ? `density ${c.values.density_g_cm3.toPrecision(4)} g/cm³` : null, c.values.xray_sld != null ? `x-ray SLD ${c.values.xray_sld.toPrecision(4)}` : null, c.values.neutron_sld != null ? `neutron SLD ${c.values.neutron_sld.toPrecision(4)}` : null].filter(Boolean).join(", ") : ""}
+                        {c.optical ? `${c.optical.wavelength_nm[0]}–${c.optical.wavelength_nm[1]} nm, ${c.optical.rows} rows` : ""}
+                      </td>
+                      <td>{c.source?.doi ?? c.source?.title ?? "—"}{c.source?.notes ? <div className="hint">{c.source.notes}</div> : null}</td>
+                      <td>
+                        <button onClick={() => (c.family === "physical" ? setDensityLabel(c.label) : setPickedDataset({ dataset_id: c.dataset_id, label: c.label }))}>
+                          Use for my layer
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {densityLabel && <div className="hint">Density dataset chosen: {densityLabel}</div>}
+            </div>
+          )}
         </div>
       )}
 
@@ -310,24 +338,24 @@ export default function WorkflowPage() {
             disabled={!selected}
             onClick={() =>
               selected &&
-              setLayers([...layers, { release: selected.release, material: selected.name, dataset_label: pickedDataset?.label || undefined, thickness: thickness ? Number(thickness) : undefined, roughness: roughness ? Number(roughness) : undefined }])
+              setLayers([...layers, { release: selected.release, material: selected.name, dataset_label: pickedDataset?.label || undefined, density_dataset_label: densityLabel || undefined, thickness: thickness ? Number(thickness) : undefined, roughness: roughness ? Number(roughness) : undefined }])
             }
           >
             Add layer
           </button>
         </p>
         <table>
-          <thead><tr><th>#</th><th>Database</th><th>Material</th><th>Dataset</th><th>Thickness Å</th><th>Roughness Å</th><th>Entered by you</th><th /></tr></thead>
+          <thead><tr><th>#</th><th>Database</th><th>Material</th><th>Dataset</th><th>Density dataset</th><th>Thickness Å</th><th>Roughness Å</th><th>Entered by you</th><th /></tr></thead>
           <tbody>
             {layers.map((l, i) => (
               <tr key={i}>
-                <td>{i + 1}</td><td>{l.release ?? "—"}</td><td>{l.material}</td><td>{l.dataset_label ?? "(must be unambiguous)"}</td>
+                <td>{i + 1}</td><td>{l.release ?? "—"}</td><td>{l.material}</td><td>{l.dataset_label ?? "(must be unambiguous)"}</td><td>{l.density_dataset_label ?? "(must be unambiguous)"}</td>
                 <td>{l.thickness ?? "—"}</td><td>{l.roughness ?? "—"}</td>
                 <td><KindBadge kind="user_assumption" /></td>
                 <td><button onClick={() => setLayers(layers.filter((_, j) => j !== i))}>Remove</button></td>
               </tr>
             ))}
-            <tr><td>sub</td><td colSpan={6}>substrate <input value={substrate} onChange={(e) => setSubstrate(e.target.value)} />{bundleRelease ? ` (looked up in ${bundleRelease})` : ""}</td><td /></tr>
+            <tr><td>sub</td><td colSpan={7}>substrate <input value={substrate} onChange={(e) => setSubstrate(e.target.value)} />{bundleRelease ? ` (looked up in ${bundleRelease})` : ""}</td><td /></tr>
           </tbody>
         </table>
         <p>
