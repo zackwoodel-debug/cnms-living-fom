@@ -13,6 +13,7 @@ from cnms_fom.descriptors.registry import (
     STRUCTURAL_DESCRIPTORS,
     descriptor_dictionary,
 )
+from cnms_fom.fom_engine.identity import FormulaNotCanonical, reduced_formula
 from cnms_fom.schemas.materials import (
     DescriptorComputeOut,
     MaterialDetailOut,
@@ -59,18 +60,18 @@ def list_materials(
 def create_material(payload: MaterialIn, db: Session = Depends(get_db)) -> Material:
     """Create a material-context record.
 
-    The reduced formula is derived with pymatgen when it is installed; otherwise
-    the supplied formula is used verbatim. The uniqueness constraint is on
-    (reduced formula, polymorph, specimen form) — Eq. (3)'s identity, not the
-    formula alone.
+    The uniqueness constraint is on (reduced formula, polymorph, specimen form) —
+    Eq. (3)'s identity, not the formula alone. The reduction goes through
+    ``fom_engine.identity`` so every writer computes the same identity; this endpoint
+    used to fall back to the formula verbatim when pymatgen was absent, which made
+    ``Hf2O4`` and ``HfO2`` one material or two depending on the machine.
     """
-    reduced = payload.formula
     try:
-        from pymatgen.core import Composition
-
-        reduced = Composition(payload.formula).reduced_formula
-    except Exception:  # noqa: BLE001 - pymatgen optional, or an exotic formula string
-        pass
+        reduced = reduced_formula(payload.formula)
+    except FormulaNotCanonical as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
 
     existing = (
         db.query(Material)

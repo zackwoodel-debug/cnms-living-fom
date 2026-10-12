@@ -253,3 +253,131 @@ def test_eps_inf_is_derived_when_a_k_curve_proves_transparency(source_db, sessio
     #  Derived from a measurement under a stated approximation, so CALCULATED.
     assert value.provenance_tier.value == "calculated"
     assert "n^2 - k^2" in value.method
+
+
+# ---------------------------------------------------------------------------
+# A materials-db release: the release's own rules decide identity and tier
+# ---------------------------------------------------------------------------
+
+RELEASE_SCHEMA = SOURCE_SCHEMA.replace(
+    "dataset_label TEXT, source_id INTEGER\n);\nCREATE TABLE optical_dispersion",
+    "wavelength_nm REAL, energy_ev REAL, dataset_label TEXT, source_id INTEGER\n);\nCREATE TABLE optical_dispersion",
+).replace(
+    "n REAL, k REAL, temperature_c REAL, dataset_label TEXT, source_id INTEGER\n);",
+    "n REAL, k REAL, temperature_c REAL, dataset_label TEXT, raw_record_table TEXT, source_id INTEGER\n);",
+)
+
+
+class StubKinds:
+    """materials-db's dataset_kind.py, as a stub: one page is a model fit."""
+
+    def model_fit_reason(self, raw_record_table):
+        return "RI.info calculation script" if raw_record_table == "main/TiO2/fit.yml" else None
+
+
+@pytest.fixture
+def release_db(tmp_path):
+    import json
+
+    folder = tmp_path / "materials-db-v9.9.9"
+    folder.mkdir()
+    path = folder / "materials-db-v9.9.9.sqlite"
+    connection = sqlite3.connect(path)
+    connection.executescript(RELEASE_SCHEMA)
+    connection.execute("INSERT INTO materials VALUES (42, 'Titanium dioxide', 'TiO2', 'K')")
+    connection.execute("INSERT INTO sources VALUES (1, '10.1/x', 'A paper', 'A. Author', 1951, NULL, NULL)")
+    rows = [
+        (1, 3.9, None, None, None, None, None, None, None, "rutile | density_MP_DFT"),
+        (2, 4.2, None, None, None, None, None, None, None, "density_literature"),
+        (3, None, 31.0, None, None, None, None, 0.15406, 8048.0, "rutile | xray_sld_real | periodictable_CuKalpha"),
+        (4, None, None, None, 86.0, None, 0.0, None, None, "dielectric_static_total | MP_DFPT"),
+        (5, None, None, None, 7.4, None, None, None, None, "dielectric_electronic | MP_DFPT"),
+        (6, 4.0, None, None, None, None, None, None, None, "density_guessed"),
+    ]
+    for record_id, density, xray, neutron, dielectric, temp, freq, wl, ev, label in rows:
+        connection.execute(
+            "INSERT INTO physical_properties VALUES (?, 42, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            (record_id, density, xray, neutron, dielectric, temp, freq, wl, ev, label),
+        )
+    for index, (wavelength, n, label, table) in enumerate(
+        [
+            (500.0, 2.7, "rutile | Devore1951 | o-ray", "main/TiO2/Devore-o.yml"),
+            (700.0, 2.5, "rutile | Devore1951 | o-ray", "main/TiO2/Devore-o.yml"),
+            (500.0, 2.6, "Fit2020", "main/TiO2/fit.yml"),
+            (700.0, 2.4, "Fit2020", "main/TiO2/fit.yml"),
+        ]
+    ):
+        connection.execute(
+            "INSERT INTO optical_dispersion VALUES (?, 42, ?, ?, NULL, NULL, ?, ?, 1)",
+            (index + 1, wavelength, n, label, table),
+        )
+    connection.commit()
+    connection.close()
+    (folder / "MANIFEST.json").write_text(json.dumps({"dataset": "materials-db", "version": "9.9.9"}))
+    (folder / "material_registry.csv").write_text("material_id,key,name\n42,oxides_50:TiO2@rutile,Titanium dioxide\n")
+    return path
+
+
+def _promote_release(session, release_db, **kwargs):
+    from cnms_fom.ingest import materials_db as importer
+
+    importer.stage(session, release_db)
+    return importer.promote(session, release_db, specimen_form=SpecimenForm.BULK_SINGLE_CRYSTAL, **kwargs)
+
+
+def test_release_values_are_tiered_by_what_their_label_says(release_db, session):
+    from cnms_fom.db.enums import ProvenanceTier
+
+    _promote_release(session, release_db, kinds=StubKinds())
+    rho = {d.provenance_tier: d for d in session.query(DescriptorValue).filter(DescriptorValue.descriptor_key == "rho")}
+    assert rho[ProvenanceTier.CALCULATED].value == pytest.approx(3.9)  # density_MP_DFT
+    assert rho[ProvenanceTier.MEASURED].value == pytest.approx(4.2)  # density_literature
+    assert "DFT" in rho[ProvenanceTier.CALCULATED].method
+
+    by_key = {v.property_key: v for v in session.query(PropertyValue)}
+    assert by_key["sld_xray"].provenance_tier is ProvenanceTier.CALCULATED
+    #  The DFPT static permittivity is a calculation, recorded as the reduction it is, with
+    #  no direction claimed, so eligibility keeps it out of an analysis until one is given.
+    k = by_key["k"]
+    assert (k.provenance_tier, k.value, k.frequency_hz) == (ProvenanceTier.CALCULATED, 86.0, 0.0)
+    assert k.reduction_rule.startswith("mean of principal values") and k.tensor_component is None
+    assert "DFT" in k.method and len(k.method) <= 128
+    #  dielectric_electronic is eps_inf, never the static k.
+    assert by_key["eps_inf"].value == pytest.approx(7.4)
+    assert by_key["eps_inf"].provenance_tier is ProvenanceTier.CALCULATED
+
+
+def test_release_phase_comes_from_the_label_or_the_stable_key(release_db, session):
+    _promote_release(session, release_db, kinds=StubKinds())
+    polymorphs = {m.polymorph for m in session.query(Material)}
+    #  "density_literature" has no phase in its label; the key oxides_50:TiO2@rutile names it.
+    assert polymorphs == {"rutile"}
+
+
+def test_a_label_outside_the_release_grammar_is_quarantined(release_db, session):
+    report = _promote_release(session, release_db, kinds=StubKinds())
+    assert any("outside the release grammar" in reason for reason in report.quarantine_reasons)
+
+
+def test_release_model_fits_are_modeled_and_measured_data_measured(release_db, session):
+    from cnms_fom.db.enums import ProvenanceTier
+
+    _promote_release(session, release_db, kinds=StubKinds())
+    tiers = {s.dataset_label: s.provenance_tier for s in session.query(SpectralSeries)}
+    assert tiers["rutile | Devore1951 | o-ray"] is ProvenanceTier.MEASURED
+    assert tiers["Fit2020"] is ProvenanceTier.MODELED
+
+
+def test_without_dataset_kinds_release_optics_are_quarantined_not_assumed(release_db, session, tmp_path):
+    report = _promote_release(session, release_db, materials_db_root=tmp_path)
+    assert session.query(SpectralSeries).count() == 0
+    assert any("measured vs model fit" in reason for reason in report.quarantine_reasons)
+
+
+def test_an_older_exports_calculated_sld_is_calculated(source_db, session):
+    from cnms_fom.db.enums import ProvenanceTier
+
+    materials_db.stage(session, source_db)
+    materials_db.promote(session, source_db, specimen_form=SpecimenForm.BULK_SINGLE_CRYSTAL)
+    sld = session.query(PropertyValue).filter(PropertyValue.property_key == "sld_xray").one()
+    assert sld.provenance_tier is ProvenanceTier.CALCULATED

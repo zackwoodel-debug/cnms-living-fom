@@ -658,6 +658,47 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _atlas(args: argparse.Namespace) -> int:
+    """The materials atlas: build it from the release, check it, query it read-only."""
+    import subprocess
+
+    from cnms_fom.config import get_settings
+
+    root = Path(__file__).resolve().parents[2]
+    if args.action == "build":
+        command = [sys.executable, str(root / "materials-atlas" / "build.py")]
+        command += ["--release", str(Path(args.release or get_settings().materials_db_release_dir).expanduser())]
+        if args.sample:
+            command.append("--sample")
+        #  The generator stops on any failed check and leaves the previous atlas in place.
+        return subprocess.run(command, check=False).returncode
+
+    from cnms_fom.atlas import AtlasUnavailable, open_atlas
+    from cnms_fom.atlas import tools as atlas_tools
+    from cnms_fom.atlas.reader import status
+
+    if args.action == "status":
+        report = status()
+        print(json.dumps(report, indent=2))
+        return 0 if report["ok"] else 1
+    try:
+        atlas = open_atlas()
+    except AtlasUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    try:
+        if args.action == "lookup":
+            result = atlas_tools.lookup(atlas, args.material, args.quantity)
+        elif args.action == "search":
+            result = atlas_tools.search(atlas, args.query, family=args.family, limit=args.limit)
+        else:
+            result = atlas_tools.coverage(atlas, args.material)
+    finally:
+        atlas.close()
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 1 if result.get("error") else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="cnms-fom", description="CNMS Living FOM platform.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -858,6 +899,27 @@ def main(argv: list[str] | None = None) -> int:
     cache_parser.add_argument("--model")
 
     research.set_defaults(func=_research)
+
+    atlas = subparsers.add_parser(
+        "atlas", help="The materials-db reference atlas: build it, check it, query it (read-only)."
+    )
+    atlas_sub = atlas.add_subparsers(dest="action", required=True)
+    atlas_build = atlas_sub.add_parser(
+        "build", help="Build the vault and index from the release (runs every check)."
+    )
+    atlas_build.add_argument("--release", help="Release folder (default: MATERIALS_DB_RELEASE_DIR).")
+    atlas_build.add_argument("--sample", action="store_true", help="Only the five sample materials.")
+    atlas_sub.add_parser("status", help="Whether the index is built, current, and what it holds.")
+    atlas_lookup = atlas_sub.add_parser("lookup", help="Exact stored values for a material.")
+    atlas_lookup.add_argument("material")
+    atlas_lookup.add_argument("--quantity", default="all")
+    atlas_search = atlas_sub.add_parser("search", help="Ranked note sections for a query.")
+    atlas_search.add_argument("query")
+    atlas_search.add_argument("--family")
+    atlas_search.add_argument("--limit", type=int, default=8)
+    atlas_coverage = atlas_sub.add_parser("coverage", help="What exists and what is missing.")
+    atlas_coverage.add_argument("material", nargs="?")
+    atlas.set_defaults(func=_atlas)
 
     serve = subparsers.add_parser("serve", help="Run the API with uvicorn.")
     serve.add_argument("--host")

@@ -171,7 +171,7 @@ def test_promotion_plan_lists_refusals(client, export_file):
 def test_promotion_without_a_material_is_409_not_500(client, export_file):
     client.post("/modalfit/import", json={"path": str(export_file)})
     response = client.post(
-        "/modalfit/fits/1/promote", json={"material_id": 999, "dry_run": False}
+        "/modalfit/fits/1/promote", json={"material_id": 999, "dry_run": False, "operator": "test-operator"}
     )
     assert response.status_code == 409
     assert "polymorph" in response.json()["detail"]
@@ -196,7 +196,7 @@ def test_promotion_writes_measured_values_for_a_real_material(client, export_fil
 
     written = client.post(
         "/modalfit/fits/1/promote",
-        json={"material_id": material["id"], "dry_run": False, "temperature_k": 300.0},
+        json={"material_id": material["id"], "dry_run": False, "temperature_k": 300.0, "operator": "test-operator"},
     ).json()
     assert written["written"] == 2
     assert written["provenance_tier"] == "measured"
@@ -268,3 +268,10 @@ def test_sessions_listing_is_empty_and_an_unknown_transcript_is_404(client):
     assert client.get("/rag/sessions").json() == []
     assert client.get("/rag/sessions/nope").status_code == 404
     assert client.delete("/rag/sessions/nope").status_code == 404
+
+
+def test_a_real_promotion_over_http_needs_an_operator(client, export_file):
+    client.post("/modalfit/import", json={"path": str(export_file)})
+    material = client.post("/materials", json={"formula": "HfO2", "polymorph": "monoclinic", "specimen_form": "crystalline_film"}).json()
+    r = client.post("/modalfit/fits/1/promote", json={"material_id": material["id"], "dry_run": False})
+    assert r.status_code == 409 and "operator" in r.json()["detail"]

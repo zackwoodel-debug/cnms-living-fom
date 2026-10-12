@@ -19,6 +19,14 @@ class Settings(BaseSettings):
         description="SQLAlchemy URL for the Postgres instance.",
     )
     db_echo: bool = False
+    #  A claim about the database, not a feature switch. It selects the ORM type for
+    #  ``document_chunks.embedding`` at import (``db/base.embedding_column_type``),
+    #  and nothing can make it agree with the schema it is pointed at. Migration 0009
+    #  converts the column to ``vector`` exactly when the ``vector`` extension is
+    #  present, so the correct value is "does this database have that extension".
+    #  Either direction of disagreement breaks retrieval — see
+    #  ``rag_backend.vectorstore.embedding_storage_mismatch`` — so a mismatch is
+    #  reported at startup and in ``/health/ready`` rather than left to be found.
     pgvector_enabled: bool = True
     embedding_dim: int = 768
 
@@ -98,11 +106,29 @@ class Settings(BaseSettings):
     #  regardless; this only bounds what goes back into the prompt.
     assistant_history_turns: int = 6
 
+    # --- materials-atlas (reference data, read-only) ------------------------
+    #  The index built by `cnms-fom atlas build` from a materials-db release. Relative
+    #  paths resolve against the repository root. The atlas holds published reference
+    #  values; nothing reads them into property_values, a FOM score or the optimizer.
+    materials_atlas_index: str = "materials-atlas/index/atlas_index.sqlite"
+    #  The release this platform is pinned to. An index built from any other release is
+    #  stale, and the atlas tools refuse it rather than answer from the wrong data.
+    materials_atlas_release: str = "0.22.0"
+    #  Where `cnms-fom atlas build` reads the release from.
+    materials_db_release_dir: str = "~/code/materials-db/release/materials-db-v0.22.0"
+    #  The materials-db service the suite workflow reads (its /suite routes). Local, or an SSH tunnel to the host that holds the full database:
+    #  `ssh -L 8000:localhost:8000 <host>`. Read-only; this platform never writes to it.
+    materials_db_url: str = "http://127.0.0.1:8000"
+    materials_db_timeout_s: float = 30.0
+
     # --- API --------------------------------------------------------------
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     log_level: str = "INFO"
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    #  The dashboard (Vite, :5173) and Quark (:8080) both call the API from the browser.
+    cors_origins: list[str] = Field(
+        default_factory=lambda: ["http://localhost:5173", "http://localhost:8080"]
+    )
 
     # --- Analysis defaults (FOM_PROOF) ------------------------------------
     permutation_b: int = Field(

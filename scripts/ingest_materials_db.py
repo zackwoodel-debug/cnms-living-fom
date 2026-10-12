@@ -6,7 +6,8 @@ blocks promotion, and writes nothing. Pointing an importer at a research
 database and letting it write on the first run is how provenance gets lost.
 
     # What is in it, and what would stop it being used?
-    python scripts/ingest_materials_db.py survey ~/Desktop/materials-db/data/materials_oxide_test.db
+    python scripts/ingest_materials_db.py survey \
+        ~/code/materials-db/release/materials-db-v0.22.0/materials-db-v0.22.0.sqlite
 
     # Copy rows verbatim into external_records (still inert).
     python scripts/ingest_materials_db.py stage <db>
@@ -69,6 +70,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     promote.add_argument("--operator", default="", help="Who is asserting the specimen form.")
     promote.add_argument("--skip-optical", action="store_true")
+    promote.add_argument(
+        "--materials-db-root",
+        type=Path,
+        help="materials-db checkout, for a release's measured-vs-model-fit rule (default: the "
+        "release folder's ../..). Without it a release's optical rows are quarantined.",
+    )
 
     derive = sub.add_parser("derive-eps-inf", help="eps_inf = n^2 from a transparent window.")
     derive.add_argument("--window", type=float, nargs=2, default=[1000.0, 2000.0], metavar=("LO_NM", "HI_NM"))
@@ -91,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
                     phase_map=materials_db.load_phase_map(args.phase_map),
                     include_optical=not args.skip_optical,
                     operator=args.operator,
+                    materials_db_root=args.materials_db_root,
                 )
             )
         elif args.command == "derive-eps-inf":

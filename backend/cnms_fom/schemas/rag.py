@@ -95,6 +95,9 @@ class CorpusStatsResponse(BaseModel):
     total_chunks: int
     embedded_chunks: int
     pgvector: bool
+    #  One entry per embedding model in the corpus. More than one means the
+    #  similarities are only comparable within each group.
+    embeddings_by_model: dict[str, int] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -237,6 +240,10 @@ class ChatResponse(BaseModel):
         description="Set when the answer was withheld because every tool came back empty. It is "
         "what the model would have said, kept for transparency — an ungrounded draft, not an "
         "answer.",
+    )
+    unsupported_numbers: list[str] = Field(
+        default_factory=list,
+        description="Numbers in the answer that no tool returned; also named in the answer text.",
     )
     disclaimer: str = (
         "Retrieval output is for reading, not for data entry. FOM_PROOF Sec. 2.3: a missing "

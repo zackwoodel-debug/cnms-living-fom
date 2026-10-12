@@ -316,6 +316,7 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
         latency_ms=answer.latency_ms,
         usage=answer.usage,
         suppressed_answer=answer.suppressed_answer,
+        unsupported_numbers=answer.unsupported_numbers,
     )
 
 

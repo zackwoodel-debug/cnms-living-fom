@@ -100,8 +100,40 @@ def ready() -> dict:
     except Exception as exc:  # noqa: BLE001
         checks["retrieval"] = {"ok": False, "error": str(exc)}
 
+    #  PGVECTOR_ENABLED is a claim about the schema that nothing enforces. Reported
+    #  either way, but only one direction is a fault: with the flag off over a vector
+    #  column, reads work and ingestion fails, and a system that answers queries while
+    #  silently refusing new documents gets diagnosed as a corpus problem. With the
+    #  flag on over a json column the results are correct and only the ANN index is
+    #  missing, which is a performance ceiling, not a broken deployment.
+    try:
+        from cnms_fom.db.base import get_engine as _engine_for_embedding
+        from cnms_fom.rag_backend.vectorstore import embedding_storage_mismatch
+
+        mismatch = embedding_storage_mismatch(_engine_for_embedding())
+        if mismatch:
+            retrieval = checks.setdefault("retrieval", {})
+            retrieval["embedding_storage_mismatch"] = mismatch
+            if not settings.pgvector_enabled:
+                retrieval["ok"] = False
+    except Exception:  # noqa: BLE001 - a check that cannot run reports nothing
+        pass
+
+    #  The materials atlas: optional (the platform works without it), but a missing or
+    #  stale index is reported here, because the assistant's atlas tools will refuse it.
+    try:
+        from cnms_fom.atlas.reader import status as atlas_status
+
+        checks["atlas"] = atlas_status()
+    except Exception as exc:  # noqa: BLE001 - readiness must report, not raise
+        checks["atlas"] = {"ok": False, "error": str(exc)}
+
     return {
-        "status": "ok" if checks["database"]["ok"] else "degraded",
+        "status": (
+            "ok"
+            if checks["database"]["ok"] and checks.get("retrieval", {}).get("ok", True)
+            else "degraded"
+        ),
         "version": __version__,
         "checks": checks,
     }

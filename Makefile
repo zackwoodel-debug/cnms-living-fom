@@ -4,7 +4,7 @@
 .PHONY: help install install-all test lint typecheck format \
         db-init db-migrate db-revision db-seed db-example serve frontend \
         up down logs compliance ingest-survey import-fits compare-fits ask \
-        cards clean
+        cards clean smoke-suite
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -18,6 +18,9 @@ install-all:  ## Everything: pymatgen, torch/botorch, langchain, pgvector
 
 test:  ## Run the test suite (no database or network needed)
 	pytest -q
+
+smoke-suite:  ## End-to-end smoke test of the integrated workflow (replays recorded materials-db answers; no network, no ModalFit)
+	cd backend && pytest -q tests/test_suite_workflow.py
 
 lint:  ## Ruff
 	ruff check backend/

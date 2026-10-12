@@ -266,6 +266,7 @@ def promote(
             temperature_k=payload.temperature_k,
             substrate=payload.substrate,
             dry_run=payload.dry_run,
+            operator=payload.operator,
         )
         if not payload.dry_run:
             db.commit()

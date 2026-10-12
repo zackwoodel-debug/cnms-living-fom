@@ -116,7 +116,7 @@ none.
 
 ## 3. The assistant's tools
 
-Twenty tools. Everything that touches an **analysis table is read-only** — there is
+Twenty-five tools. Everything that touches an **analysis table is read-only** — there is
 no tool that writes a property value, edits a fit, or creates a material, and that
 is the design rather than an unimplemented feature. The way to forbid a
 model-mediated path into the analysis tables is not to build one.
@@ -141,8 +141,25 @@ model-mediated path into the analysis tables is not to build one.
 | `lookup_property_values` | stored values with full measurement context and source |
 | `descriptor_dictionary` | valid registry keys, units, transforms, caveats |
 | `lookup_fom_scores` | scores with status and definition version |
+| `atlas_lookup` | materials-db reference values (n, k at 633 nm, density, SLD, calculated dielectric constants) for every material a name, synonym, formula, CAS or catalog code matches, each with kind, evidence grade, source and `citable`, plus ready-to-quote `summary` lines |
+| `atlas_compare` | the same for several materials side by side |
+| `atlas_search` | ranked sections of the materials-atlas notes, for context |
+| `atlas_read` | one atlas note or section, with its typed links |
+| `atlas_coverage` | what the atlas holds for a material (or overall), and what is missing and why |
 | `write_card` *(opt-in)* | records a synthesis as a `proposed`, non-citable card |
 | `link_cards` *(opt-in)* | a typed edge; `contradicts` requires a note |
+
+### The materials atlas: reference values, not platform data
+
+The five `atlas_*` tools read `materials-atlas/index/atlas_index.sqlite`, built from the
+materials-db release by `cnms-fom atlas build` (see `materials-atlas/README.md`). Every result
+says what it is — `origin: "materials-db v0.22.0 (reference)"`, the release checksum, and per
+value whether it is measured, a model fit or a calculation, its evidence grade with the reason,
+and `citable` with the reason. They are read-only through a package that imports no session
+(`backend/cnms_fom/atlas/`, checked statically in `test_atlas.py`), and nothing leads from an
+atlas value into `property_values`. A formula that names several materials returns all of them; a
+material the release does not contain comes back absent, with the release's own reason where it
+recorded one. A missing or stale index is an error the model has to report, not "no data".
 
 `descriptor_dictionary` exists so the assistant uses the platform's vocabulary
 instead of inventing a plausible-looking key: "the band gap" resolves to `Eg`

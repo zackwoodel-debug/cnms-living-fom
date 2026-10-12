@@ -31,6 +31,7 @@ depends on it, and a cache is the one place here where that reasoning does not a
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -67,38 +68,88 @@ def enabled() -> bool:
     return bool(get_settings().llm_cache_enabled)
 
 
+@contextlib.contextmanager
+def _isolated(db):
+    """Contain a cache operation in a SAVEPOINT so its failure stays its own.
+
+    Both functions below promise never to raise, and they kept that promise by
+    calling ``db.rollback()`` — which rolls back the *caller's* transaction. The
+    cache is called from the extraction and grading loops, where the session is
+    holding a half-built brief and its claims, so a cache key that was too long for
+    its column silently discarded real work and the subsequent commit wrote nothing.
+    No error surfaced, because the failure had already been logged as a cache miss.
+
+    This is bug 19's shape a second time: an optional component taking down the
+    request it was meant to accelerate. There it was the dense retriever poisoning a
+    Postgres transaction; here it is a best-effort write destroying committed-bound
+    data on every backend.
+
+    A SAVEPOINT alone is not enough, and the reason is specific. A failed
+    ``Session.flush()`` cannot be contained by one: SQLAlchemy rolls the savepoint
+    back itself and then requires a full ``Session.rollback()`` before the session
+    can be used again, because a half-applied flush may have left the identity map
+    inconsistent. Measured, not assumed — a contained flush failure leaves the next
+    query raising ``PendingRollbackError``. So the cache writes through Core
+    ``insert``/``update`` statements instead, which carry no ORM state, and a
+    SAVEPOINT does contain those. It costs nothing here: this is one table with no
+    relationships.
+    """
+    nested = db.begin_nested()
+    try:
+        yield
+    except Exception:
+        if nested.is_active:
+            nested.rollback()
+        raise
+    else:
+        if nested.is_active:
+            nested.commit()
+
+
+def _match(entry, kind: str, key: str, model: str, prompt_version: str):
+    return (
+        entry.kind == kind,
+        entry.cache_key == key,
+        entry.model == model,
+        entry.prompt_version == (prompt_version or ""),
+    )
+
+
 def get(db, kind: str, key: str, *, model: str, prompt_version: str = "") -> dict | None:
     """Look up a cached payload, or None.
 
-    Never raises. A cache that can fail a request is worse than no cache, so a
-    broken lookup is logged and treated as a miss.
+    Never raises, and never at the caller's expense. A cache that can fail a
+    request is worse than no cache; one that can silently delete the request's work
+    is worse than either.
     """
     if not enabled() or db is None:
         return None
     try:
+        from sqlalchemy import select, update
+
         from cnms_fom.db.models import LlmCacheEntry
 
-        row = (
-            db.query(LlmCacheEntry)
-            .filter(
-                LlmCacheEntry.kind == kind,
-                LlmCacheEntry.cache_key == key,
-                LlmCacheEntry.model == model,
-                LlmCacheEntry.prompt_version == (prompt_version or ""),
+        with _isolated(db):
+            row = db.execute(
+                select(
+                    LlmCacheEntry.id, LlmCacheEntry.payload, LlmCacheEntry.hit_count
+                ).where(*_match(LlmCacheEntry, kind, key, model, prompt_version))
+            ).first()
+            if row is None:
+                return None
+            #  Usage counters are best-effort. Counted in SQL rather than read,
+            #  incremented and written back, so two workers sharing a passage
+            #  cannot each overwrite the other's increment.
+            db.execute(
+                update(LlmCacheEntry)
+                .where(LlmCacheEntry.id == row.id)
+                .values(
+                    hit_count=LlmCacheEntry.hit_count + 1,
+                    last_used_at=datetime.now(timezone.utc),
+                )
             )
-            .one_or_none()
-        )
-        if row is None:
-            return None
-        #  Usage counters are best-effort: a cache hit must not fail because a
-        #  counter could not be written.
-        try:
-            row.hit_count = (row.hit_count or 0) + 1
-            row.last_used_at = datetime.now(timezone.utc)
-            db.flush()
-        except Exception:  # noqa: BLE001
-            db.rollback()
-        return json.loads(row.payload) if isinstance(row.payload, str) else row.payload
+            payload = row.payload
+        return json.loads(payload) if isinstance(payload, str) else payload
     except Exception as exc:  # noqa: BLE001
         logger.debug("Cache lookup failed (%s); treating as a miss.", exc)
         return None
@@ -114,36 +165,40 @@ def put(
         logger.warning("Refusing to cache unknown kind %r.", kind)
         return
     try:
+        from sqlalchemy import insert, select, update
+
         from cnms_fom.db.models import LlmCacheEntry
 
-        existing = (
-            db.query(LlmCacheEntry)
-            .filter(
-                LlmCacheEntry.kind == kind,
-                LlmCacheEntry.cache_key == key,
-                LlmCacheEntry.model == model,
-                LlmCacheEntry.prompt_version == (prompt_version or ""),
-            )
-            .one_or_none()
-        )
-        if existing is not None:
-            existing.payload = payload
-            existing.last_used_at = datetime.now(timezone.utc)
-        else:
-            db.add(LlmCacheEntry(
-                kind=kind,
-                cache_key=key,
-                model=model,
-                prompt_version=prompt_version or "",
-                payload=payload,
-            ))
-        db.flush()
+        with _isolated(db):
+            existing = db.execute(
+                select(LlmCacheEntry.id).where(
+                    *_match(LlmCacheEntry, kind, key, model, prompt_version)
+                )
+            ).scalar_one_or_none()
+            now = datetime.now(timezone.utc)
+            if existing is not None:
+                db.execute(
+                    update(LlmCacheEntry)
+                    .where(LlmCacheEntry.id == existing)
+                    .values(payload=payload, last_used_at=now)
+                )
+            else:
+                db.execute(
+                    insert(LlmCacheEntry).values(
+                        kind=kind,
+                        cache_key=key,
+                        model=model,
+                        prompt_version=prompt_version or "",
+                        payload=payload,
+                        hit_count=0,
+                    )
+                )
     except Exception as exc:  # noqa: BLE001
+        #  No db.rollback() here. The SAVEPOINT has undone the cache's own writes,
+        #  and rolling back the session would discard the caller's. The likeliest
+        #  arrival here is two workers racing to insert the same key, which is a
+        #  cache hit that came a moment too late — nothing to report.
         logger.debug("Cache write failed (%s); continuing uncached.", exc)
-        try:
-            db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
 
 
 def stats(db) -> dict:

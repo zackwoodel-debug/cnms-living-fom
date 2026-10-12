@@ -1,0 +1,3568 @@
+{
+ "meta": {
+  "release_version": "0.22.0",
+  "db_sha256": "6295f0dda5f7e0d0d8d43d8575d1936a94ba022dc340535975b8b883aecaec0b",
+  "materials_db_release_commit": "a624aaaa766578e82d496774c73403dd8a41ef84",
+  "refractiveindex_info_commit": "c5c2f188e848453def5970e347399d653df2ffc2",
+  "materials_project_database_version": "2026.04.13",
+  "helper_provenance": {
+   "materials_db_release_commit": "a624aaaa766578e82d496774c73403dd8a41ef84",
+   "refractiveindex_info_commit": "c5c2f188e848453def5970e347399d653df2ffc2",
+   "helper_files_unchanged_since_release_commit": [
+    "scripts/dataset_kind.py",
+    "scripts/generate_ml_release_set.py",
+    "scripts/fluoride_nitride_sulfide_material_list.py",
+    "scripts/pure_element_material_list.py",
+    "data/step1_selections*.json"
+   ]
+  },
+  "index_schema": 1,
+  "sample": false,
+  "subset": "materials [38, 42, 72, 77, 132, 133, 219, 223, 232, 310, 316, 1840]",
+  "generator_sha256": "d8d02c97e935b7de572753adde6b39e5956d3046cb47e40d40e759809714ba05",
+  "generator_files": [
+   "backend/cnms_fom/materials_release/__init__.py",
+   "backend/cnms_fom/materials_release/kinds.py",
+   "backend/cnms_fom/materials_release/labels.py",
+   "backend/cnms_fom/materials_release/release.py",
+   "materials-atlas/atlas/__init__.py",
+   "materials-atlas/atlas/authors.py",
+   "materials-atlas/atlas/check.py",
+   "materials-atlas/atlas/evidence.py",
+   "materials-atlas/atlas/facts.py",
+   "materials-atlas/atlas/ids.py",
+   "materials-atlas/atlas/index.py",
+   "materials-atlas/atlas/links.py",
+   "materials-atlas/atlas/pages.py",
+   "materials-atlas/atlas/render.py",
+   "materials-atlas/atlas/templates.py",
+   "materials-atlas/atlas/vault.py",
+   "materials-atlas/atlas/yamlfm.py",
+   "materials-atlas/build.py"
+  ]
+ },
+ "notes": [
+  {
+   "id": "family.batch2_31",
+   "type": "family",
+   "title": "Family: batch2_31",
+   "path": "Families/batch2_31.md",
+   "material_id": null,
+   "family": "batch2_31",
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "members",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "members",
+     "material.batch2_31.pbs-rock-salt"
+    ]
+   ],
+   "links_in": [
+    [
+     "member_of",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "member_of",
+     "material.batch2_31.pbs-rock-salt"
+    ]
+   ]
+  },
+  {
+   "id": "family.batch3b_4",
+   "type": "family",
+   "title": "Family: batch3b_4",
+   "path": "Families/batch3b_4.md",
+   "material_id": null,
+   "family": "batch3b_4",
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "members",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "members",
+     "material.batch3b_4.c-graphite"
+    ]
+   ],
+   "links_in": [
+    [
+     "member_of",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "member_of",
+     "material.batch3b_4.c-graphite"
+    ]
+   ]
+  },
+  {
+   "id": "family.chalcogenides",
+   "type": "family",
+   "title": "Family: chalcogenides",
+   "path": "Families/chalcogenides.md",
+   "material_id": null,
+   "family": "chalcogenides",
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "members",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "members",
+     "material.chalcogenides.cugas2"
+    ]
+   ],
+   "links_in": [
+    [
+     "member_of",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "member_of",
+     "material.chalcogenides.cugas2"
+    ]
+   ]
+  },
+  {
+   "id": "family.glass_catalogs",
+   "type": "family",
+   "title": "Family: glass_catalogs",
+   "path": "Families/glass_catalogs.md",
+   "material_id": null,
+   "family": "glass_catalogs",
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "members",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ]
+   ],
+   "links_in": [
+    [
+     "member_of",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ]
+   ]
+  },
+  {
+   "id": "family.liquids",
+   "type": "family",
+   "title": "Family: liquids",
+   "path": "Families/liquids.md",
+   "material_id": null,
+   "family": "liquids",
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "members",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "member_of",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "family.oxides_50",
+   "type": "family",
+   "title": "Family: oxides_50",
+   "path": "Families/oxides_50.md",
+   "material_id": null,
+   "family": "oxides_50",
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "members",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "members",
+     "material.oxides_50.tio2-rutile"
+    ]
+   ],
+   "links_in": [
+    [
+     "member_of",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "member_of",
+     "material.oxides_50.tio2-rutile"
+    ]
+   ]
+  },
+  {
+   "id": "family.semiconductors",
+   "type": "family",
+   "title": "Family: semiconductors",
+   "path": "Families/semiconductors.md",
+   "material_id": null,
+   "family": "semiconductors",
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "members",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "members",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "member_of",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "member_of",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "home",
+   "type": "home",
+   "title": "materials-atlas",
+   "path": "Home.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "material.batch2_31.as2s3-amorphous",
+   "type": "material",
+   "title": "Arsenic trisulfide",
+   "path": "Materials/batch2_31/Arsenic trisulfide.md",
+   "material_id": 72,
+   "family": "batch2_31",
+   "formula": "As2S3",
+   "grades": [
+    "C"
+   ],
+   "aliases": [
+    "Arsenic trisulphide"
+   ],
+   "links_out": [
+    [
+     "cites",
+     "source.57"
+    ],
+    [
+     "cites",
+     "source.76"
+    ],
+    [
+     "cites",
+     "source.77"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.batch2_31"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.batch2_31"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.57"
+    ],
+    [
+     "cited_by",
+     "source.76"
+    ],
+    [
+     "cited_by",
+     "source.77"
+    ]
+   ]
+  },
+  {
+   "id": "material.batch2_31.pbs-rock-salt",
+   "type": "material",
+   "title": "Lead(II) sulfide (galena)",
+   "path": "Materials/batch2_31/Lead(II) sulfide (galena).md",
+   "material_id": 77,
+   "family": "batch2_31",
+   "formula": "PbS",
+   "grades": [
+    "none"
+   ],
+   "aliases": [
+    "Lead sulfide",
+    "Lead(II) sulfide",
+    "Lead(II) sulphide",
+    "galena"
+   ],
+   "links_out": [
+    [
+     "cites",
+     "source.1"
+    ],
+    [
+     "cites",
+     "source.57"
+    ],
+    [
+     "cites",
+     "source.83"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.batch2_31"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.batch2_31"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.1"
+    ],
+    [
+     "cited_by",
+     "source.57"
+    ],
+    [
+     "cited_by",
+     "source.83"
+    ]
+   ]
+  },
+  {
+   "id": "material.batch3b_4.c-diamond-cubic",
+   "type": "material",
+   "title": "Diamond",
+   "path": "Materials/batch3b_4/Diamond.md",
+   "material_id": 132,
+   "family": "batch3b_4",
+   "formula": "C",
+   "grades": [
+    "C"
+   ],
+   "aliases": [],
+   "links_out": [
+    [
+     "cites",
+     "source.1"
+    ],
+    [
+     "cites",
+     "source.131"
+    ],
+    [
+     "cites",
+     "source.1964"
+    ],
+    [
+     "cites",
+     "source.57"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.dielectric"
+    ],
+    [
+     "has_property",
+     "property.k_633nm"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.batch3b_4"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.batch3b_4"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.dielectric"
+    ],
+    [
+     "materials_with",
+     "property.k_633nm"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.1"
+    ],
+    [
+     "cited_by",
+     "source.131"
+    ],
+    [
+     "cited_by",
+     "source.1964"
+    ],
+    [
+     "cited_by",
+     "source.57"
+    ]
+   ]
+  },
+  {
+   "id": "material.batch3b_4.c-graphite",
+   "type": "material",
+   "title": "Graphite",
+   "path": "Materials/batch3b_4/Graphite.md",
+   "material_id": 133,
+   "family": "batch3b_4",
+   "formula": "C",
+   "grades": [
+    "D",
+    "none"
+   ],
+   "aliases": [],
+   "links_out": [
+    [
+     "cites",
+     "source.132"
+    ],
+    [
+     "cites",
+     "source.133"
+    ],
+    [
+     "cites",
+     "source.57"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.batch3b_4"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.batch3b_4"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.132"
+    ],
+    [
+     "cited_by",
+     "source.133"
+    ],
+    [
+     "cited_by",
+     "source.57"
+    ]
+   ]
+  },
+  {
+   "id": "material.chalcogenides.as2se3",
+   "type": "material",
+   "title": "Arsenic triselenide",
+   "path": "Materials/chalcogenides/Arsenic triselenide.md",
+   "material_id": 223,
+   "family": "chalcogenides",
+   "formula": "As2Se3",
+   "grades": [
+    "B"
+   ],
+   "aliases": [],
+   "links_out": [
+    [
+     "cites",
+     "source.155"
+    ],
+    [
+     "cites",
+     "source.186"
+    ],
+    [
+     "cites",
+     "source.3"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.k_633nm"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.chalcogenides"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.chalcogenides"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.k_633nm"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.155"
+    ],
+    [
+     "cited_by",
+     "source.186"
+    ],
+    [
+     "cited_by",
+     "source.3"
+    ]
+   ]
+  },
+  {
+   "id": "material.chalcogenides.cugas2",
+   "type": "material",
+   "title": "Copper gallium sulfide",
+   "path": "Materials/chalcogenides/Copper gallium sulfide.md",
+   "material_id": 219,
+   "family": "chalcogenides",
+   "formula": "CuGaS2",
+   "grades": [
+    "C"
+   ],
+   "aliases": [
+    "Copper gallium sulphide"
+   ],
+   "links_out": [
+    [
+     "cites",
+     "source.1"
+    ],
+    [
+     "cites",
+     "source.189"
+    ],
+    [
+     "cites",
+     "source.1964"
+    ],
+    [
+     "cites",
+     "source.3"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.dielectric"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.chalcogenides"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.chalcogenides"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.dielectric"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.1"
+    ],
+    [
+     "cited_by",
+     "source.189"
+    ],
+    [
+     "cited_by",
+     "source.1964"
+    ],
+    [
+     "cited_by",
+     "source.3"
+    ]
+   ]
+  },
+  {
+   "id": "material.glass_catalogs.schott-optical-n-bk7ht",
+   "type": "material",
+   "title": "SCHOTT N-BK7HT",
+   "path": "Materials/Glass catalogs/SCHOTT/SCHOTT N-BK7HT.md",
+   "material_id": 1840,
+   "family": "glass_catalogs",
+   "formula": null,
+   "grades": [
+    "C"
+   ],
+   "aliases": [],
+   "links_out": [
+    [
+     "cites",
+     "source.349"
+    ],
+    [
+     "cites",
+     "source.440"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.k_633nm"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "member_of",
+     "family.glass_catalogs"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.glass_catalogs"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.k_633nm"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "cited_by",
+     "source.349"
+    ],
+    [
+     "cited_by",
+     "source.440"
+    ]
+   ]
+  },
+  {
+   "id": "material.liquids.h2o",
+   "type": "material",
+   "title": "Water",
+   "path": "Materials/liquids/Water.md",
+   "material_id": 232,
+   "family": "liquids",
+   "formula": "H2O",
+   "grades": [
+    "A",
+    "T",
+    "none"
+   ],
+   "aliases": [
+    "ice"
+   ],
+   "links_out": [
+    [
+     "cites",
+     "source.213"
+    ],
+    [
+     "cites",
+     "source.214"
+    ],
+    [
+     "cites",
+     "source.215"
+    ],
+    [
+     "cites",
+     "source.216"
+    ],
+    [
+     "cites",
+     "source.217"
+    ],
+    [
+     "cites",
+     "source.218"
+    ],
+    [
+     "cites",
+     "source.219"
+    ],
+    [
+     "cites",
+     "source.220"
+    ],
+    [
+     "cites",
+     "source.221"
+    ],
+    [
+     "cites",
+     "source.222"
+    ],
+    [
+     "cites",
+     "source.223"
+    ],
+    [
+     "cites",
+     "source.3"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.k_633nm"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.liquids"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.liquids"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.k_633nm"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.213"
+    ],
+    [
+     "cited_by",
+     "source.214"
+    ],
+    [
+     "cited_by",
+     "source.215"
+    ],
+    [
+     "cited_by",
+     "source.216"
+    ],
+    [
+     "cited_by",
+     "source.217"
+    ],
+    [
+     "cited_by",
+     "source.218"
+    ],
+    [
+     "cited_by",
+     "source.219"
+    ],
+    [
+     "cited_by",
+     "source.220"
+    ],
+    [
+     "cited_by",
+     "source.221"
+    ],
+    [
+     "cited_by",
+     "source.222"
+    ],
+    [
+     "cited_by",
+     "source.223"
+    ],
+    [
+     "cited_by",
+     "source.3"
+    ]
+   ]
+  },
+  {
+   "id": "material.oxides_50.sio2-amorphous",
+   "type": "material",
+   "title": "Silicon dioxide (fused silica)",
+   "path": "Materials/oxides_50/Silicon dioxide (fused silica).md",
+   "material_id": 38,
+   "family": "oxides_50",
+   "formula": "SiO2",
+   "grades": [
+    "C"
+   ],
+   "aliases": [
+    "Silica",
+    "Silicon dioxide",
+    "fused silica",
+    "Silicon dioxide / quartz"
+   ],
+   "links_out": [
+    [
+     "cites",
+     "source.3"
+    ],
+    [
+     "cites",
+     "source.4"
+    ],
+    [
+     "cites",
+     "source.45"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.oxides_50"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.oxides_50"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.3"
+    ],
+    [
+     "cited_by",
+     "source.4"
+    ],
+    [
+     "cited_by",
+     "source.45"
+    ]
+   ]
+  },
+  {
+   "id": "material.oxides_50.tio2-rutile",
+   "type": "material",
+   "title": "Titanium dioxide (rutile / anatase)",
+   "path": "Materials/oxides_50/Titanium dioxide (rutile - anatase).md",
+   "material_id": 42,
+   "family": "oxides_50",
+   "formula": "TiO2",
+   "grades": [
+    "C"
+   ],
+   "aliases": [
+    "Titanium dioxide"
+   ],
+   "links_out": [
+    [
+     "cites",
+     "source.1"
+    ],
+    [
+     "cites",
+     "source.1964"
+    ],
+    [
+     "cites",
+     "source.3"
+    ],
+    [
+     "cites",
+     "source.49"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.dielectric"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.oxides_50"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.oxides_50"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.dielectric"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.1"
+    ],
+    [
+     "cited_by",
+     "source.1964"
+    ],
+    [
+     "cited_by",
+     "source.3"
+    ],
+    [
+     "cited_by",
+     "source.49"
+    ]
+   ]
+  },
+  {
+   "id": "material.semiconductors.cdte",
+   "type": "material",
+   "title": "Cadmium telluride",
+   "path": "Materials/semiconductors/Cadmium telluride.md",
+   "material_id": 316,
+   "family": "semiconductors",
+   "formula": "CdTe",
+   "grades": [
+    "D"
+   ],
+   "aliases": [],
+   "links_out": [
+    [
+     "cites",
+     "source.1"
+    ],
+    [
+     "cites",
+     "source.1964"
+    ],
+    [
+     "cites",
+     "source.210"
+    ],
+    [
+     "cites",
+     "source.3"
+    ],
+    [
+     "cites",
+     "source.324"
+    ],
+    [
+     "cites",
+     "source.325"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.dielectric"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.semiconductors"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.semiconductors"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.dielectric"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.1"
+    ],
+    [
+     "cited_by",
+     "source.1964"
+    ],
+    [
+     "cited_by",
+     "source.210"
+    ],
+    [
+     "cited_by",
+     "source.3"
+    ],
+    [
+     "cited_by",
+     "source.324"
+    ],
+    [
+     "cited_by",
+     "source.325"
+    ]
+   ]
+  },
+  {
+   "id": "material.semiconductors.gaas",
+   "type": "material",
+   "title": "Gallium arsenide",
+   "path": "Materials/semiconductors/Gallium arsenide.md",
+   "material_id": 310,
+   "family": "semiconductors",
+   "formula": "GaAs",
+   "grades": [
+    "A"
+   ],
+   "aliases": [],
+   "links_out": [
+    [
+     "cites",
+     "source.1"
+    ],
+    [
+     "cites",
+     "source.3"
+    ],
+    [
+     "cites",
+     "source.304"
+    ],
+    [
+     "cites",
+     "source.305"
+    ],
+    [
+     "cites",
+     "source.310"
+    ],
+    [
+     "cites",
+     "source.311"
+    ],
+    [
+     "cites",
+     "source.312"
+    ],
+    [
+     "cites",
+     "source.313"
+    ],
+    [
+     "cites",
+     "source.314"
+    ],
+    [
+     "cites",
+     "source.315"
+    ],
+    [
+     "cites",
+     "source.316"
+    ],
+    [
+     "cites",
+     "source.317"
+    ],
+    [
+     "cites",
+     "source.318"
+    ],
+    [
+     "has_property",
+     "property.density"
+    ],
+    [
+     "has_property",
+     "property.k_633nm"
+    ],
+    [
+     "has_property",
+     "property.k_status"
+    ],
+    [
+     "has_property",
+     "property.n_633nm"
+    ],
+    [
+     "has_property",
+     "property.neutron_sld"
+    ],
+    [
+     "has_property",
+     "property.xray_sld"
+    ],
+    [
+     "member_of",
+     "family.semiconductors"
+    ]
+   ],
+   "links_in": [
+    [
+     "members",
+     "family.semiconductors"
+    ],
+    [
+     "materials_with",
+     "property.density"
+    ],
+    [
+     "materials_with",
+     "property.k_633nm"
+    ],
+    [
+     "materials_with",
+     "property.k_status"
+    ],
+    [
+     "materials_with",
+     "property.n_633nm"
+    ],
+    [
+     "materials_with",
+     "property.neutron_sld"
+    ],
+    [
+     "materials_with",
+     "property.xray_sld"
+    ],
+    [
+     "cited_by",
+     "source.1"
+    ],
+    [
+     "cited_by",
+     "source.3"
+    ],
+    [
+     "cited_by",
+     "source.304"
+    ],
+    [
+     "cited_by",
+     "source.305"
+    ],
+    [
+     "cited_by",
+     "source.310"
+    ],
+    [
+     "cited_by",
+     "source.311"
+    ],
+    [
+     "cited_by",
+     "source.312"
+    ],
+    [
+     "cited_by",
+     "source.313"
+    ],
+    [
+     "cited_by",
+     "source.314"
+    ],
+    [
+     "cited_by",
+     "source.315"
+    ],
+    [
+     "cited_by",
+     "source.316"
+    ],
+    [
+     "cited_by",
+     "source.317"
+    ],
+    [
+     "cited_by",
+     "source.318"
+    ]
+   ]
+  },
+  {
+   "id": "methods.evidence-grades",
+   "type": "methods",
+   "title": "Evidence grades",
+   "path": "Methods/Evidence grades.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "methods.how-to-read-a-note",
+   "type": "methods",
+   "title": "How to read a note",
+   "path": "Methods/How to read a note.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "methods.independence",
+   "type": "methods",
+   "title": "Independence",
+   "path": "Methods/Independence.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "methods.measured-vs-model-fit",
+   "type": "methods",
+   "title": "Measured vs model fit",
+   "path": "Methods/Measured vs model fit.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "methods.what-the-atlas-cannot-tell-you",
+   "type": "methods",
+   "title": "What the atlas cannot tell you",
+   "path": "Methods/What the atlas cannot tell you.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "property.density",
+   "type": "property",
+   "title": "density",
+   "path": "Properties/density.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "materials_with",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "materials_with",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ],
+    [
+     "materials_with",
+     "material.liquids.h2o"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "has_property",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "has_property",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "has_property",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ],
+    [
+     "has_property",
+     "material.liquids.h2o"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "property.dielectric",
+   "type": "property",
+   "title": "dielectric constant",
+   "path": "Properties/dielectric constant.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "materials_with",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.cdte"
+    ]
+   ],
+   "links_in": [
+    [
+     "has_property",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.cdte"
+    ]
+   ]
+  },
+  {
+   "id": "property.k_633nm",
+   "type": "property",
+   "title": "k at 633 nm",
+   "path": "Properties/k at 633 nm.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "materials_with",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "materials_with",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ],
+    [
+     "materials_with",
+     "material.liquids.h2o"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "has_property",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "has_property",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ],
+    [
+     "has_property",
+     "material.liquids.h2o"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "property.k_status",
+   "type": "property",
+   "title": "k status",
+   "path": "Properties/k status.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "materials_with",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "materials_with",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ],
+    [
+     "materials_with",
+     "material.liquids.h2o"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "has_property",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "has_property",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "has_property",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ],
+    [
+     "has_property",
+     "material.liquids.h2o"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "property.n_633nm",
+   "type": "property",
+   "title": "n at 633 nm",
+   "path": "Properties/n at 633 nm.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "materials_with",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "materials_with",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ],
+    [
+     "materials_with",
+     "material.liquids.h2o"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "has_property",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "has_property",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ],
+    [
+     "has_property",
+     "material.liquids.h2o"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "property.neutron_sld",
+   "type": "property",
+   "title": "neutron SLD",
+   "path": "Properties/neutron SLD.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "materials_with",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "materials_with",
+     "material.liquids.h2o"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "has_property",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "has_property",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "has_property",
+     "material.liquids.h2o"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "property.xray_sld",
+   "type": "property",
+   "title": "X-ray SLD",
+   "path": "Properties/X-ray SLD.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "materials_with",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "materials_with",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "materials_with",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "materials_with",
+     "material.liquids.h2o"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "materials_with",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "materials_with",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "has_property",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "has_property",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "has_property",
+     "material.batch3b_4.c-graphite"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "has_property",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "has_property",
+     "material.liquids.h2o"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "has_property",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "has_property",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.1",
+   "type": "source",
+   "title": "Materials Project 2013 — Materials Project",
+   "path": "Sources/Materials Project 2013 - Materials Project.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "cited_by",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "cited_by",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "cited_by",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "cited_by",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "cites",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "cites",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "cites",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "cites",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.131",
+   "type": "source",
+   "title": "Taylor 2023 — Comparative determination of atomic boron and carrier concentration in highly boron doped nano-crystalline diamond.",
+   "path": "Sources/Taylor 2023 - Comparative determination of atomic boron and.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.batch3b_4.c-diamond-cubic"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.batch3b_4.c-diamond-cubic"
+    ]
+   ]
+  },
+  {
+   "id": "source.132",
+   "type": "source",
+   "title": "Mounet 2005 — First-principles determination of the structural, vibrational and thermodynamic properties of diamond, graphite, and derivatives",
+   "path": "Sources/Mounet 2005 - First-principles determination of the structural, vibrational.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.batch3b_4.c-graphite"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.batch3b_4.c-graphite"
+    ]
+   ]
+  },
+  {
+   "id": "source.133",
+   "type": "source",
+   "title": "Djurišić 1999 — Optical properties of graphite.",
+   "path": "Sources/Djurišić 1999 - Optical properties of graphite.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.batch3b_4.c-graphite"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.batch3b_4.c-graphite"
+    ]
+   ]
+  },
+  {
+   "id": "source.155",
+   "type": "source",
+   "title": "Joseph 2020 — Grating-coupled surface plasmon-polariton sensing at a flat metal–analyte interface in a hybrid-configuration.",
+   "path": "Sources/Joseph 2020 - Grating-coupled surface plasmon-polariton sensing at a.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.chalcogenides.as2se3"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.chalcogenides.as2se3"
+    ]
+   ]
+  },
+  {
+   "id": "source.186",
+   "type": "source",
+   "title": "Materials Project — MP bulk DFT density used as a film approximation (chalcogenide family)",
+   "path": "Sources/Materials Project - MP bulk DFT density used as (source 186).md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.chalcogenides.as2se3"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.chalcogenides.as2se3"
+    ]
+   ]
+  },
+  {
+   "id": "source.189",
+   "type": "source",
+   "title": "Boyd 1971 — Linear and nonlinear optical properties of AgGaS2, CuGaS2, and CuInS2, and theory of the wedge technique for the measurement of nonlinear coefficients.",
+   "path": "Sources/Boyd 1971 - Linear and nonlinear optical properties of (source 189).md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.chalcogenides.cugas2"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.chalcogenides.cugas2"
+    ]
+   ]
+  },
+  {
+   "id": "source.1964",
+   "type": "source",
+   "title": "Petousis 2017 — High-throughput screening of inorganic compounds for the discovery of novel dielectric and optical materials",
+   "path": "Sources/Petousis 2017 - High-throughput screening of inorganic compounds for.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "cited_by",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "cited_by",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "cited_by",
+     "material.semiconductors.cdte"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "cites",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "cites",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "cites",
+     "material.semiconductors.cdte"
+    ]
+   ]
+  },
+  {
+   "id": "source.210",
+   "type": "source",
+   "title": "Marple 1964 — Refractive index of ZnSe, ZnTe, and CdTe.",
+   "path": "Sources/Marple 1964 - Refractive index of ZnSe, ZnTe, and.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.cdte"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.cdte"
+    ]
+   ]
+  },
+  {
+   "id": "source.213",
+   "type": "source",
+   "title": "Tanaka 2001 — Recommended table for the density of water between 0 C and 40 C based on recent experimental reports",
+   "path": "Sources/Tanaka 2001 - Recommended table for the density of.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.214",
+   "type": "source",
+   "title": "Segelstein 1981",
+   "path": "Sources/Segelstein 1981.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.215",
+   "type": "source",
+   "title": "Warren 2008 — Optical constants of ice from the ultraviolet to the microwave: A revised compilation.",
+   "path": "Sources/Warren 2008 - Optical constants of ice from the.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.216",
+   "type": "source",
+   "title": "Hale 1973 — Optical constants of water in the 200-nm to 200-µm wavelength region.",
+   "path": "Sources/Hale 1973 - Optical constants of water in the.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.217",
+   "type": "source",
+   "title": "Warren 1984 — Optical constants of ice from the ultraviolet to the microwave.",
+   "path": "Sources/Warren 1984 - Optical constants of ice from the.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.218",
+   "type": "source",
+   "title": "Kedenburg 2012 — Linear refractive index and absorption measurements of nonlinear optical liquids in the visible and near-infrared spectral region.",
+   "path": "Sources/Kedenburg 2012 - Linear refractive index and absorption measurements.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.219",
+   "type": "source",
+   "title": "Daimon 2007 — Measurement of the refractive index of distilled water from the near-infrared region to the ultraviolet region.",
+   "path": "Sources/Daimon 2007 - Measurement of the refractive index of.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.220",
+   "type": "source",
+   "title": "Bashkatov 2003 — Water refractive index in dependence on temperature and wavelength: a simple approximation.",
+   "path": "Sources/Bashkatov 2003 - Water refractive index in dependence on.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.221",
+   "type": "source",
+   "title": "Kofman 2019 — The refractive index of amorphous and crystalline water ice in the UV–vis.",
+   "path": "Sources/Kofman 2019 - The refractive index of amorphous and.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.222",
+   "type": "source",
+   "title": "Rowe 2020 — Temperature-dependent optical properties of liquid water from 240 to 298 K.",
+   "path": "Sources/Rowe 2020 - Temperature-dependent optical properties of liquid water.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.223",
+   "type": "source",
+   "title": "Afsar 1977 — Measurements of the optical constants of liquid H2O and D2O between 6 and 450 cm−1.",
+   "path": "Sources/Afsar 1977 - Measurements of the optical constants of.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.liquids.h2o"
+    ]
+   ]
+  },
+  {
+   "id": "source.3",
+   "type": "source",
+   "title": "periodictable package — periodictable: x-ray and neutron scattering length density calculation",
+   "path": "Sources/periodictable package - periodictable- x-ray and neutron scattering length (source 3).md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "cited_by",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "cited_by",
+     "material.liquids.h2o"
+    ],
+    [
+     "cited_by",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "cited_by",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "cited_by",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.chalcogenides.as2se3"
+    ],
+    [
+     "cites",
+     "material.chalcogenides.cugas2"
+    ],
+    [
+     "cites",
+     "material.liquids.h2o"
+    ],
+    [
+     "cites",
+     "material.oxides_50.sio2-amorphous"
+    ],
+    [
+     "cites",
+     "material.oxides_50.tio2-rutile"
+    ],
+    [
+     "cites",
+     "material.semiconductors.cdte"
+    ],
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.304",
+   "type": "source",
+   "title": "Rakić 1996 — Modeling the optical dielectric function of GaAs and AlAs: Extension of Adachi’s model.",
+   "path": "Sources/Rakić 1996 - Modeling the optical dielectric function of.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.305",
+   "type": "source",
+   "title": "Gadras 2025 — Optical refractive index measurements of AlGaAs at high temperature for fully automated molecular beam epitaxy growth of Bragg mirrors.",
+   "path": "Sources/Gadras 2025 - Optical refractive index measurements of AlGaAs.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.310",
+   "type": "source",
+   "title": "Papatryfonos 2021 — Refractive indices of MBE-grown AlxGa1-xAs ternary alloys in the transparent wavelength region.",
+   "path": "Sources/Papatryfonos 2021 - Refractive indices of MBE-grown AlxGa1-xAs ternary.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.311",
+   "type": "source",
+   "title": "Aspnes 1986 — Optical properties of AlxGa1−xAs.",
+   "path": "Sources/Aspnes 1986 - Optical properties of AlxGa1−xAs.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.312",
+   "type": "source",
+   "title": "Jellison 1992 — Optical functions of GaAs, GaP, and Ge determined by two-channel polarization modulation ellipsometry.",
+   "path": "Sources/Jellison 1992 - Optical functions of GaAs, GaP, and.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.313",
+   "type": "source",
+   "title": "Adachi 1989 — Optical dispersion relations for GaP, GaAs, GaSb, InP, InAs, InSb, AlxGa1−xAs, and In1−xGaxAsyP1−y.",
+   "path": "Sources/Adachi 1989 - Optical dispersion relations for GaP, GaAs,.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.314",
+   "type": "source",
+   "title": "Ozaki 1995 — Spectroscopic ellipsometry and thermoreflectance of GaAs.",
+   "path": "Sources/Ozaki 1995 - Spectroscopic ellipsometry and thermoreflectance of GaAs.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.315",
+   "type": "source",
+   "title": "Skauli 2003 — Improved dispersion relations for GaAs and applications to nonlinear optics.",
+   "path": "Sources/Skauli 2003 - Improved dispersion relations for GaAs and.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.316",
+   "type": "source",
+   "title": "Kachare 1976 — Refractive index of ion-implanted GaAs.",
+   "path": "Sources/Kachare 1976 - Refractive index of ion-implanted GaAs.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.317",
+   "type": "source",
+   "title": "Perner 2023 — Simultaneous measurement of mid-infrared refractive indices in thin-film heterostructures: Methodology and results for GaAs/AlGaAs.",
+   "path": "Sources/Perner 2023 - Simultaneous measurement of mid-infrared refractive indices.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.318",
+   "type": "source",
+   "title": "Franta 2026 — Dispersion models describing coupled systems in doped crystals. II. Infrared phonon excitations in GaAs single crystals and phonon-plasmon coupling in Zn-doped GaAs.",
+   "path": "Sources/Franta 2026 - Dispersion models describing coupled systems in.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.gaas"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.gaas"
+    ]
+   ]
+  },
+  {
+   "id": "source.324",
+   "type": "source",
+   "title": "Adachi 1993 — Optical properties of CdTe: Experiment and modeling.",
+   "path": "Sources/Adachi 1993 - Optical properties of CdTe- Experiment and.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.cdte"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.cdte"
+    ]
+   ]
+  },
+  {
+   "id": "source.325",
+   "type": "source",
+   "title": "DeBell 1979 — Cryogenic refractive indices and temperature coefficients of cadmium telluride from 6 µm to 22 µm.",
+   "path": "Sources/DeBell 1979 - Cryogenic refractive indices and temperature coefficients.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.semiconductors.cdte"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.semiconductors.cdte"
+    ]
+   ]
+  },
+  {
+   "id": "source.349",
+   "type": "source",
+   "title": "SCHOTT",
+   "path": "Sources/SCHOTT (source 349).md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ]
+   ]
+  },
+  {
+   "id": "source.4",
+   "type": "source",
+   "title": "Source 4 — Literature density estimate (amorphous/glass materials with no MP structure)",
+   "path": "Sources/Source 4 - Literature density estimate (amorphous-glass materials with.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.oxides_50.sio2-amorphous"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.oxides_50.sio2-amorphous"
+    ]
+   ]
+  },
+  {
+   "id": "source.440",
+   "type": "source",
+   "title": "SCHOTT 2017 — SCHOTT Zemax catalog 2017-01-20b (obtained from http://www.schott.com)See also SCHOTT glass data sheets",
+   "path": "Sources/SCHOTT 2017 - SCHOTT Zemax catalog 2017-01-20b (obtained from (source 440).md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.glass_catalogs.schott-optical-n-bk7ht"
+    ]
+   ]
+  },
+  {
+   "id": "source.45",
+   "type": "source",
+   "title": "Malitson 1965 — Interspecimen comparison of the refractive index of fused silica.",
+   "path": "Sources/Malitson 1965 - Interspecimen comparison of the refractive index.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.oxides_50.sio2-amorphous"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.oxides_50.sio2-amorphous"
+    ]
+   ]
+  },
+  {
+   "id": "source.49",
+   "type": "source",
+   "title": "Devore 1951 — Refractive indices of rutile and sphalerite.",
+   "path": "Sources/Devore 1951 - Refractive indices of rutile and sphalerite.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.oxides_50.tio2-rutile"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.oxides_50.tio2-rutile"
+    ]
+   ]
+  },
+  {
+   "id": "source.57",
+   "type": "source",
+   "title": "periodictable package — periodictable: x-ray and neutron scattering length density calculation",
+   "path": "Sources/periodictable package - periodictable- x-ray and neutron scattering length (source 57).md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "cited_by",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "cited_by",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "cited_by",
+     "material.batch3b_4.c-graphite"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.batch2_31.as2s3-amorphous"
+    ],
+    [
+     "cites",
+     "material.batch2_31.pbs-rock-salt"
+    ],
+    [
+     "cites",
+     "material.batch3b_4.c-diamond-cubic"
+    ],
+    [
+     "cites",
+     "material.batch3b_4.c-graphite"
+    ]
+   ]
+  },
+  {
+   "id": "source.76",
+   "type": "source",
+   "title": "Amorphous Materials, Inc. — AMTIR-6 (As2S3) product datasheet",
+   "path": "Sources/Amorphous Materials, Inc. - AMTIR-6 (As2S3) product datasheet.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.batch2_31.as2s3-amorphous"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.batch2_31.as2s3-amorphous"
+    ]
+   ]
+  },
+  {
+   "id": "source.77",
+   "type": "source",
+   "title": "Rodney 1958 — Refractive index of arsenic trisulfide.",
+   "path": "Sources/Rodney 1958 - Refractive index of arsenic trisulfide.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.batch2_31.as2s3-amorphous"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.batch2_31.as2s3-amorphous"
+    ]
+   ]
+  },
+  {
+   "id": "source.83",
+   "type": "source",
+   "title": "Zemel — Electrical and optical properties of epitaxial films of PbS, PbSe, PbTe, and SnTe.",
+   "path": "Sources/Zemel - Electrical and optical properties of epitaxial.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [
+    [
+     "cited_by",
+     "material.batch2_31.pbs-rock-salt"
+    ]
+   ],
+   "links_in": [
+    [
+     "cites",
+     "material.batch2_31.pbs-rock-salt"
+    ]
+   ]
+  },
+  {
+   "id": "view.densities-by-kind",
+   "type": "view",
+   "title": "Densities by kind",
+   "path": "Views/Densities by kind.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.density-materials",
+   "type": "view",
+   "title": "density - materials",
+   "path": "Views/density - materials.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.dielectric-materials",
+   "type": "view",
+   "title": "dielectric constant - materials",
+   "path": "Views/dielectric constant - materials.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.disagreeing-sources",
+   "type": "view",
+   "title": "Disagreeing sources",
+   "path": "Views/Disagreeing sources.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.k_633nm-materials",
+   "type": "view",
+   "title": "k at 633 nm - materials",
+   "path": "Views/k at 633 nm - materials.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.k_status-materials",
+   "type": "view",
+   "title": "k status - materials",
+   "path": "Views/k status - materials.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.model-fit-datasets",
+   "type": "view",
+   "title": "Model-fit datasets",
+   "path": "Views/Model-fit datasets.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.n-633-by-grade",
+   "type": "view",
+   "title": "n at 633 nm by grade",
+   "path": "Views/n at 633 nm by grade.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.n_633nm-materials",
+   "type": "view",
+   "title": "n at 633 nm - materials",
+   "path": "Views/n at 633 nm - materials.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.neutron_sld-materials",
+   "type": "view",
+   "title": "neutron SLD - materials",
+   "path": "Views/neutron SLD - materials.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.release-notices",
+   "type": "view",
+   "title": "Release notices",
+   "path": "Views/Release notices.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  },
+  {
+   "id": "view.xray_sld-materials",
+   "type": "view",
+   "title": "X-ray SLD - materials",
+   "path": "Views/X-ray SLD - materials.md",
+   "material_id": null,
+   "family": null,
+   "formula": null,
+   "grades": [],
+   "aliases": [],
+   "links_out": [],
+   "links_in": []
+  }
+ ]
+}

@@ -99,6 +99,41 @@ def load_and_split(
     return chunks, len(pages)
 
 
+def _warn_if_corpus_uses_another_model(session, model: str) -> None:
+    """Say so when this ingest is about to mix embedding spaces.
+
+    Cosine similarity between two models' vectors is meaningless rather than noisy,
+    and the dimensions often match, so nothing downstream can detect the mix from
+    the vectors alone. Checked here because it is one cheap aggregate at ingest
+    rather than a scan on every query, and because this is the moment a person can
+    still choose differently.
+    """
+    from sqlalchemy import func
+
+    from cnms_fom.db.models import DocumentChunk
+
+    others = (
+        session.query(DocumentChunk.embedding_model, func.count(DocumentChunk.id))
+        .filter(
+            DocumentChunk.embedding.isnot(None),
+            DocumentChunk.embedding_model.isnot(None),
+            DocumentChunk.embedding_model != model,
+        )
+        .group_by(DocumentChunk.embedding_model)
+        .all()
+    )
+    if not others:
+        return
+    summary = ", ".join(f"{n} by {name}" for name, n in others)
+    logger.warning(
+        "This corpus already holds embeddings from another model (%s), and this "
+        "ingest adds %s. Retrieval compares only vectors from the same model, so "
+        "those chunks become unreachable to dense search until they are re-embedded.",
+        summary,
+        model,
+    )
+
+
 def ingest_pdf(
     session,
     path: Path | str,
@@ -164,6 +199,7 @@ def ingest_pdf(
         vectors = embed_documents([c.text for c in chunks])
         if vectors:
             check_embedding_dim(vectors[0])
+        _warn_if_corpus_uses_another_model(session, embedding_model)
 
     session.add_all(
         DocumentChunk(

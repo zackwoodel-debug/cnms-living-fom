@@ -89,7 +89,8 @@ question ──► agent loop ──┬──► search_corpus        document_c
                           ├──► list_sample_fits     fit_records  (SQL)
                           ├──► compare_fit_techniques
                           ├──► lookup_property_values
-                          └──► lookup_fom_scores
+                          ├──► lookup_fom_scores
+                          └──► atlas_lookup / atlas_search … materials-atlas index (reference, read-only)
                                      │
                           all read-only, all evidence recorded
 ```
@@ -97,7 +98,12 @@ question ──► agent loop ──┬──► search_corpus        document_c
 Prose is retrieved by similarity; every stored number is retrieved by a typed
 query. That split is deliberate — an embedding of `103.4` sits close to one of
 `130.4`, so finding a fitted thickness by cosine similarity would be silently
-wrong about exactly the kind of value a model reports without hedging.
+wrong about exactly the kind of value a model reports without hedging. The
+materials atlas follows the same split: its numbers come from an exact `values`
+table, its prose from a lexical index.
+
+Quark, the chat front end, reaches all of this through `POST /rag/chat`; it does
+not talk to the model directly, because the evidence guard lives in the loop.
 
 ## Why the objective is ln F, not F
 

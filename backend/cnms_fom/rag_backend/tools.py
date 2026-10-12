@@ -997,6 +997,162 @@ TOOLS: dict[str, Tool] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# materials-atlas: published reference values (read-only)
+# ---------------------------------------------------------------------------
+#
+#  The atlas is materials-db reference data — literature n and k, densities, SLDs,
+#  calculated dielectric constants — each with provenance and an evidence grade. It is
+#  read through its own read-only package and never touches the session: nothing an
+#  atlas tool returns can reach property_values, a FOM score or the optimizer.
+
+
+def _with_atlas(call: Callable[..., dict], *args, **kwargs) -> dict:
+    from cnms_fom.atlas import AtlasUnavailable, open_atlas
+
+    try:
+        atlas = open_atlas()
+    except AtlasUnavailable as exc:
+        #  An unbuilt or stale atlas is an error the model must report, not "no data".
+        return {"error": str(exc), "atlas_unavailable": True}
+    try:
+        return call(atlas, *args, **kwargs)
+    finally:
+        atlas.close()
+
+
+def _atlas_search(session, *, query: str, family: str | None = None, limit: int = 8) -> dict:  # noqa: ARG001
+    from cnms_fom.atlas import tools as atlas_tools
+
+    return _with_atlas(atlas_tools.search, query, family=family, limit=limit)
+
+
+def _atlas_read(session, *, note_id: str, section: str | None = None) -> dict:  # noqa: ARG001
+    from cnms_fom.atlas import tools as atlas_tools
+
+    return _with_atlas(atlas_tools.read, note_id, section=section)
+
+
+def _atlas_lookup(session, *, material: str, quantity: str = "all") -> dict:  # noqa: ARG001
+    from cnms_fom.atlas import tools as atlas_tools
+
+    return _with_atlas(atlas_tools.lookup, material, quantity)
+
+
+def _atlas_compare(session, *, materials: list[str], quantity: str = "all") -> dict:  # noqa: ARG001
+    from cnms_fom.atlas import tools as atlas_tools
+
+    return _with_atlas(atlas_tools.compare, list(materials or []), quantity)
+
+
+def _atlas_coverage(session, *, material: str | None = None) -> dict:  # noqa: ARG001
+    from cnms_fom.atlas import tools as atlas_tools
+
+    return _with_atlas(atlas_tools.coverage, material)
+
+
+_QUANTITY_HELP = (
+    "One of n_633nm (refractive index at 633 nm), k_633nm, k_status, density, xray_sld, "
+    "neutron_sld, sld, dielectric, or all."
+)
+
+TOOLS.update(
+    {
+        "atlas_lookup": Tool(
+            spec=ToolSpec(
+                name="atlas_lookup",
+                description=(
+                    "Exact reference values from the materials-db atlas (2,129 materials: optical n and k, "
+                    "density, X-ray and neutron SLD, calculated dielectric constants). Use this for ANY number "
+                    "about a material. Accepts a name, synonym, formula, CAS number or catalog code. Returns "
+                    "every matching material and every phase/axis entry, each with its stored value, unit, "
+                    "label, kind (measured / model fit / calculated), evidence grade, source and citable flag. "
+                    "If several materials match, report each by name and id."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "material": {"type": "string", "description": "e.g. fused silica, GaAs, 60676-86-0, N-BK7HT."},
+                        "quantity": {"type": "string", "description": _QUANTITY_HELP},
+                    },
+                    "required": ["material"],
+                },
+            ),
+            run=_atlas_lookup,
+        ),
+        "atlas_compare": Tool(
+            spec=ToolSpec(
+                name="atlas_compare",
+                description=(
+                    "The same as atlas_lookup for several materials side by side, each with its own grade, "
+                    "kind and source. Never average values of different kinds, phases, axes or temperatures."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "materials": {"type": "array", "items": {"type": "string"}},
+                        "quantity": {"type": "string", "description": _QUANTITY_HELP},
+                    },
+                    "required": ["materials"],
+                },
+            ),
+            run=_atlas_compare,
+        ),
+        "atlas_search": Tool(
+            spec=ToolSpec(
+                name="atlas_search",
+                description=(
+                    "Search the materials-db atlas notes for context: which datasets a material has, why a "
+                    "value is graded as it is, flags and gaps the release records, what a source measured. "
+                    "Returns ranked note sections with snippets. Use atlas_lookup for the numbers themselves."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "family": {"type": "string", "description": "Optional family, e.g. semiconductors, liquids."},
+                        "limit": {"type": "integer"},
+                    },
+                    "required": ["query"],
+                },
+            ),
+            run=_atlas_search,
+        ),
+        "atlas_read": Tool(
+            spec=ToolSpec(
+                name="atlas_read",
+                description=(
+                    "Read one atlas note (or one section of it) by its id, e.g. "
+                    "material.oxides_50.sio2-amorphous, with its frontmatter and typed links. Sections: "
+                    "Summary, Evidence at a glance, Identity, Optical datasets, Physical properties, Agreement "
+                    "between sources, Flags and gaps, What this note cannot tell you, Get the data."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {"note_id": {"type": "string"}, "section": {"type": "string"}},
+                    "required": ["note_id"],
+                },
+            ),
+            run=_atlas_read,
+        ),
+        "atlas_coverage": Tool(
+            spec=ToolSpec(
+                name="atlas_coverage",
+                description=(
+                    "What the atlas holds and what it is missing, and why: for one material (datasets, "
+                    "quantities with values, missing quantities with reasons) or for the whole atlas."
+                ),
+                input_schema={
+                    "type": "object",
+                    "properties": {"material": {"type": "string", "description": "Omit for the whole atlas."}},
+                },
+            ),
+            run=_atlas_coverage,
+        ),
+    }
+)
+
+
 def tool_specs(
     names: list[str] | None = None, *, allow_writes: bool = False
 ) -> list[ToolSpec]:

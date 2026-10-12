@@ -31,7 +31,9 @@ gap, not another retrieval.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -71,6 +73,9 @@ fit_disagreements — stored ModalFit refinements.
 - check_physical_plausibility, check_fit_plausibility — is this number possible?
 - lookup_bo_campaign, lookup_bo_history, lookup_bo_suggestions — the optimizer.
 - lookup_property_values, lookup_fom_scores, descriptor_dictionary — the records.
+- atlas_lookup, atlas_compare, atlas_search, atlas_read, atlas_coverage — the \
+materials-db reference atlas: published optical n and k, densities, SLDs and \
+calculated dielectric constants for 2,129 materials, each with an evidence grade.
 
 How to work
 1. Call tools before answering. Every factual claim must trace to a tool result. \
@@ -156,6 +161,18 @@ separates them.
 determination, so I would measure it a second way before building on it" is more \
 useful than a confident ranking.
 
+Using the materials atlas
+25. For a number about a material, call atlas_lookup; use atlas_search and \
+atlas_read for context. Quote the `summary` lines atlas_lookup returns as they \
+are: each already carries the material name and id, the scope, the value, the \
+grade or kind with its meaning, and the source. Call them reference values.
+26. If several materials or entries match, report each by name and id; never \
+present one as the answer for a formula. A missing k is unknown, not zero. A \
+material not in the atlas is not in the atlas: say so. Report only the phases, \
+axes and datasets the tool returned: a phase in a material's name is not data.
+27. Atlas values are reference data. They are never written into this platform's \
+records and never stand in for a CNMS measurement.
+
 You are talking to someone who will act on this in a laboratory. An "I do not \
 know, and here is what would tell us" is worth more to them than a confident \
 guess, and much less expensive."""
@@ -200,6 +217,8 @@ class AgentAnswer:
     #  What the model wrote when it was withheld for want of evidence. Kept for
     #  transparency and debugging, never presented as the answer.
     suppressed_answer: str | None = None
+    #  Numbers in the answer that no tool returned. Named in the answer itself too.
+    unsupported_numbers: list[str] = field(default_factory=list)
 
     @property
     def tools_used(self) -> list[str]:
@@ -223,6 +242,7 @@ class AgentAnswer:
             "latency_ms": self.latency_ms,
             "usage": self.usage,
             "suppressed_answer": self.suppressed_answer,
+            "unsupported_numbers": self.unsupported_numbers,
         }
 
 
@@ -255,6 +275,9 @@ CONTENT_KEYS: tuple[str, ...] = (
     "documents_by_technique", "descriptors", "properties", "spec",
     "violations", "inconsistencies", "heuristics", "checked",
     "search_space", "best_recipe", "links_out", "links_in", "body",
+    #  materials-atlas: sections found, values matched, a note read, coverage, and a
+    #  release's own record of why a material is absent (a finding, not an empty search).
+    "hits", "matches", "sections", "materials", "coverage", "absent_from_release",
 )
 
 
@@ -305,6 +328,34 @@ def _collect_citations(steps: list[AgentStep]) -> list[dict]:
                     "techniques": determination.get("techniques"),
                     "via_tool": step.tool,
                 }
+        for match in _atlas_matches(result):
+            for value in match.get("values", []) or []:
+                key = f"atlas:{match.get('note_id')} :: {value.get('quantity')} :: {value.get('label')}"
+                if key not in citations:
+                    citations[key] = {
+                        "kind": "atlas_value",
+                        "citation": key,
+                        "material": match.get("material"),
+                        "material_id": match.get("material_id"),
+                        "value": value.get("value"),
+                        "unit": value.get("unit"),
+                        "grade": value.get("grade"),
+                        "value_kind": value.get("kind"),
+                        "citable": value.get("citable"),
+                        "sources": [s.get("citation") for s in value.get("sources", []) or []],
+                        "origin": value.get("origin"),
+                        "via_tool": step.tool,
+                    }
+        for hit in result.get("hits", []) or []:
+            key = f"atlas:{hit.get('note_id')}#{hit.get('section')}"
+            if key not in citations:
+                citations[key] = {
+                    "kind": "atlas_note",
+                    "citation": key,
+                    "title": hit.get("title"),
+                    "origin": result.get("origin"),
+                    "via_tool": step.tool,
+                }
         for value in result.get("values", []) or []:
             key = f"{value.get('material')} :: {value.get('property_key')}"
             if key not in citations:
@@ -316,6 +367,73 @@ def _collect_citations(steps: list[AgentStep]) -> list[dict]:
                     "via_tool": step.tool,
                 }
     return list(citations.values())
+
+
+def _atlas_matches(result: dict) -> list[dict]:
+    """Matches from atlas_lookup, and from each lookup inside atlas_compare."""
+    matches = list(result.get("matches", []) or [])
+    for sub in result.get("materials", []) or []:
+        if isinstance(sub, dict):
+            matches.extend(sub.get("matches", []) or [])
+    return [m for m in matches if isinstance(m, dict)]
+
+
+def _searched(steps: list[AgentStep]) -> str:
+    """What the turn searched and what each search said, for a withheld answer."""
+    lines = []
+    for step in steps:
+        result = step.result if isinstance(step.result, dict) else {}
+        args = ", ".join(f"{k}={v!r}" for k, v in (step.arguments or {}).items())
+        said = result.get("error") or result.get("note") or "no result"
+        lines.append(f"- {step.tool}({args}): {said}")
+    return "\n".join(lines)
+
+
+#  A number as written in an answer: dotted versions ("0.22.0") stay one token.
+_ANSWER_NUMBER = re.compile(r"(?<![\w.])[-−]?\d+(?:\.\d+)*(?:[eE][-+]?\d+)?(?![\w])")
+#  Every number inside the evidence, wherever it sits ("n_633nm", "JOSA.55.001205").
+_EVIDENCE_NUMBER = re.compile(r"\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+
+
+def unsupported_numbers(answer: str, steps: list[AgentStep], question: str = "") -> list[str]:
+    """Numbers in the answer that no tool result (and not the question) contains.
+
+    Supported: a version or an integer that appears anywhere in the evidence (a page number
+    inside a DOI, the 633 in n_633nm), and a decimal equal to a returned value or a rounding
+    of one at the precision written ("1.33" for 1.331790355). Small integers (counts, "2
+    sources") are left alone. What remains is what a model invented, the failure FOM_PROOF
+    Sec. 15.2 is written against.
+    """
+    evidence = " ".join(json.dumps(step.result, default=str, ensure_ascii=False) for step in steps)
+    evidence += " " + question
+    known: list[float] = []
+    for token in _EVIDENCE_NUMBER.findall(evidence):
+        try:
+            known.append(float(token))
+        except ValueError:
+            continue
+    out: list[str] = []
+    for match in _ANSWER_NUMBER.finditer(answer):
+        token = match.group(0).replace("−", "-")
+        if token in out:
+            continue
+        bare = token.lstrip("-")
+        if bare.count(".") > 1:
+            if bare not in evidence:
+                out.append(token)
+            continue
+        if "." not in bare and "e" not in bare.lower():
+            if int(bare) < 100 or bare in evidence:
+                continue
+        elif bare in evidence:
+            continue
+        value = float(token)
+        decimals = len(bare.split(".")[1].split("e")[0].split("E")[0]) if "." in bare else 0
+        half = 0.5 * 10 ** (-decimals)
+        if any(abs(candidate - abs(value)) <= half * (1 + 1e-9) for candidate in known):
+            continue
+        out.append(token)
+    return out
 
 
 def _evidence_was_insufficient(steps: list[AgentStep], answer: str) -> bool:
@@ -507,7 +625,7 @@ def ask(
             "Every tool returned empty; withholding the answer text (%d step(s)).", len(steps)
         )
         suppressed = answer_text
-        answer_text = EMPTY_EVIDENCE_ANSWER
+        answer_text = EMPTY_EVIDENCE_ANSWER + "\n\nWhat was searched:\n" + _searched(steps)
         insufficient = True
     else:
         insufficient = _evidence_was_insufficient(steps, answer_text)
@@ -517,6 +635,16 @@ def ask(
                 "results are recorded in the evidence trail; read them directly."
             )
             insufficient = True
+
+    unsupported: list[str] = []
+    if steps and not insufficient:
+        unsupported = unsupported_numbers(answer_text, steps, question)
+        if unsupported:
+            #  The text is what a person reads, so the warning goes in the text.
+            answer_text += (
+                "\n\n[Unsupported numbers: " + ", ".join(unsupported) + " — no tool returned these. "
+                "Do not rely on them; the evidence trail holds every value a tool did return.]"
+            )
 
     return AgentAnswer(
         question=question,
@@ -532,6 +660,7 @@ def ask(
         latency_ms=int((time.monotonic() - started) * 1000),
         usage=result.usage if result else {},
         suppressed_answer=suppressed,
+        unsupported_numbers=unsupported,
     )
 
 
