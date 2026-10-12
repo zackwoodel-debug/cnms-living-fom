@@ -60,13 +60,13 @@ def info(client: MaterialsDbClient = Depends(get_client)) -> dict:
 
 
 @router.get("/materials")
-def materials(q: str | None = None, limit: int = 25, client: MaterialsDbClient = Depends(get_client)) -> list[dict]:
-    return _call(client.materials, q, limit)
+def materials(q: str | None = None, limit: int = 25, release: str | None = None, client: MaterialsDbClient = Depends(get_client)) -> list[dict]:
+    return _call(client.materials, q, limit, release)
 
 
 @router.get("/materials/{material_id}/evidence")
-def evidence(material_id: int, client: MaterialsDbClient = Depends(get_client)) -> dict:
-    return with_labels(_call(client.evidence, material_id))
+def evidence(material_id: int, release: str | None = None, client: MaterialsDbClient = Depends(get_client)) -> dict:
+    return with_labels(_call(client.evidence, material_id, release))
 
 
 @router.get("/optical/search")
@@ -80,11 +80,12 @@ def optical_search(
     provenance: str | None = None,
     approved_only: bool = False,
     limit: int = 50,
+    release: str | None = None,
     client: MaterialsDbClient = Depends(get_client),
 ) -> dict:
     """Tabulated n and k at one wavelength, filtered by range. Interpolated values are flagged and nothing is extrapolated."""
     result = _call(client.optical_search, wavelength_nm=wavelength_nm, n_min=n_min, n_max=n_max, k_min=k_min, k_max=k_max, q=q, provenance=provenance,
-                   approved_only=approved_only, limit=limit)
+                   approved_only=approved_only, limit=limit, release=release)
     for hit in result["results"]:
         mapped = map_evidence(EvidenceInput(dataset_id=hit["dataset_id"], provenance=hit["provenance"], review=hit["review"], review_conflict=False, states={}))
         hit["cnms"] = dict(label=mapped.label, kind=_KIND[hit["provenance"]], reviewed=mapped.reviewed)
@@ -92,6 +93,7 @@ def optical_search(
 
 
 class ReadinessIn(BaseModel):
+    release: str | None = None
     selection: dict
     technique: str
     window: dict | None = None
@@ -100,10 +102,11 @@ class ReadinessIn(BaseModel):
 
 @router.post("/readiness")
 def readiness(payload: ReadinessIn, client: MaterialsDbClient = Depends(get_client)) -> dict:
-    return _call(client.readiness, payload.selection, payload.technique, payload.window, payload.conditions)
+    return _call(client.readiness, payload.selection, payload.technique, payload.window, payload.conditions, payload.release)
 
 
 class BundleIn(BaseModel):
+    release: str | None = None   # a bundle is built from ONE release; ids and names are only meaningful inside it
     layers: list
     substrate: str = "Silicon"
     ambient: str = "air"

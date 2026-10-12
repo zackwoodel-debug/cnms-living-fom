@@ -44,14 +44,14 @@ class MaterialsDbClient:
     def info(self) -> dict:
         return self._request("GET", "/suite/info").json()
 
-    def materials(self, q: str | None = None, limit: int = 25) -> list[dict]:
-        return self._request("GET", "/suite/materials", params={"q": q, "limit": limit}).json()
+    def materials(self, q: str | None = None, limit: int = 25, release: str | None = None) -> list[dict]:
+        return self._request("GET", "/suite/materials", params={k: v for k, v in dict(q=q, limit=limit, release=release).items() if v is not None}).json()
 
-    def evidence(self, material_id: int) -> dict:
-        return self._request("GET", f"/suite/materials/{material_id}/evidence").json()
+    def evidence(self, material_id: int, release: str | None = None) -> dict:
+        return self._request("GET", f"/suite/materials/{material_id}/evidence", params={"release": release} if release else None).json()
 
-    def readiness(self, selection: dict, technique: str, window: dict | None = None, conditions: dict | None = None) -> dict:
-        return self._request("POST", "/suite/readiness", json=dict(selection=selection, technique=technique, window=window, conditions=conditions)).json()
+    def readiness(self, selection: dict, technique: str, window: dict | None = None, conditions: dict | None = None, release: str | None = None) -> dict:
+        return self._request("POST", "/suite/readiness", json=dict(selection=selection, technique=technique, window=window, conditions=conditions, release=release)).json()
 
     def bundle(self, request: dict) -> tuple[bytes, dict]:
         response = self._request("POST", "/suite/bundle", json=request)

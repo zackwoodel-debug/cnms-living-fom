@@ -54,8 +54,9 @@ function Refusal({ text }: { text: string | null }) {
 export default function WorkflowPage() {
   const info = useAsync(() => api.suiteInfo(), []);
   const [query, setQuery] = useState("");
-  const search = useAction((q: string) => api.suiteMaterials(q));
-  const evidence = useAction((id: number) => api.suiteEvidence(id));
+  const [releaseFilter, setReleaseFilter] = useState("");
+  const search = useAction((q: string) => api.suiteMaterials(q, releaseFilter || undefined));
+  const evidence = useAction((id: number, release?: string) => api.suiteEvidence(id, release));
   const [selected, setSelected] = useState<SuiteMaterial | null>(null);
 
   const [sWl, setSWl] = useState("633");
@@ -65,7 +66,7 @@ export default function WorkflowPage() {
   const [kMax, setKMax] = useState("");
   const [sApproved, setSApproved] = useState(false);
   const optSearch = useAction(() =>
-    api.opticalSearch({ wavelength_nm: sWl, n_min: nMin, n_max: nMax, k_min: kMin, k_max: kMax, q: query || undefined, approved_only: sApproved || undefined, limit: 100 }),
+    api.opticalSearch({ release: releaseFilter || undefined, wavelength_nm: sWl, n_min: nMin, n_max: nMax, k_min: kMin, k_max: kMax, q: query || undefined, approved_only: sApproved || undefined, limit: 100 }),
   );
   const optical: OpticalSearchResult | null = optSearch.data;
 
@@ -74,8 +75,9 @@ export default function WorkflowPage() {
   const [hi, setHi] = useState("800");
   const [temperature, setTemperature] = useState("");
   const [pickedDataset, setPickedDataset] = useState<SuiteDataset | null>(null);
-  const readiness = useAction((mid: number, ds: number | null) =>
+  const readiness = useAction((mid: number, ds: number | null, release?: string) =>
     api.suiteReadiness({
+      release,
       selection: ds !== null ? { dataset_id: ds } : { material_id: mid },
       technique,
       window: OPTICAL.includes(technique) ? { wavelength_nm: [Number(lo), Number(hi)] } : null,
@@ -87,9 +89,12 @@ export default function WorkflowPage() {
   const [substrate, setSubstrate] = useState("Silicon");
   const [thickness, setThickness] = useState("");
   const [roughness, setRoughness] = useState("");
+  const bundleRelease = layers.length ? layers[0].release : undefined;
+  const mixedReleases = layers.some((l) => l.release !== bundleRelease);
   const bundle = useAction(() =>
     api.suiteBundle({
-      layers,
+      release: bundleRelease,
+      layers: layers.map(({ release: _release, ...rest }) => rest),
       substrate,
       techniques: [technique],
       window: OPTICAL.includes(technique) ? { wavelength_nm: [Number(lo), Number(hi)] } : null,
@@ -140,7 +145,9 @@ export default function WorkflowPage() {
         </p>
         {info.data && (
           <p className="hint">
-            materials-db {info.data.version}: {info.data.materials} materials, {info.data.datasets} datasets, {info.data.reviews} reviews.
+            {info.data.releases
+              ? Object.entries(info.data.releases).map(([name, r]) => `${name} (materials-db ${r.version}): ${r.materials.toLocaleString()} materials, ${r.datasets.toLocaleString()} datasets, ${r.reviews} reviews`).join(" · ")
+              : `materials-db ${info.data.version}: ${info.data.materials} materials, ${info.data.datasets} datasets, ${info.data.reviews} reviews.`}
           </p>
         )}
         {info.error && <div className="notice bad">{info.error}</div>}
@@ -155,17 +162,24 @@ export default function WorkflowPage() {
           }}
         >
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="name or formula" />{" "}
+          {info.data?.releases && Object.keys(info.data.releases).length > 1 && (
+            <select value={releaseFilter} onChange={(e) => setReleaseFilter(e.target.value)}>
+              <option value="">all databases</option>
+              {Object.keys(info.data.releases).map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+          )}{" "}
           <button disabled={search.busy}>Search</button>
         </form>
         <Refusal text={search.error} />
         {search.data && (
           <table>
             <thead>
-              <tr><th>Material</th><th>Formula</th><th>Datasets (by provenance)</th><th /></tr>
+              <tr><th>Database</th><th>Material</th><th>Formula</th><th>Datasets (by provenance)</th><th /></tr>
             </thead>
             <tbody>
               {search.data.map((m) => (
-                <tr key={m.material_id}>
+                <tr key={`${m.release ?? ""}:${m.material_id}`}>
+                  <td>{m.release ?? "—"}</td>
                   <td>{m.name}</td>
                   <td>{m.formula ?? "—"}</td>
                   <td>{Object.entries(m.datasets_by_provenance).map(([k, v]) => `${k} ${v}`).join(", ")}</td>
@@ -174,8 +188,8 @@ export default function WorkflowPage() {
                       onClick={() => {
                         setSelected(m);
                         setPickedDataset(null);
-                        readiness.run(m.material_id, null);
-                        evidence.run(m.material_id);
+                        readiness.run(m.material_id, null, m.release);
+                        evidence.run(m.material_id, m.release);
                       }}
                     >
                       Inspect
@@ -209,12 +223,12 @@ export default function WorkflowPage() {
               {optical.skipped_without_k ? `; ${optical.skipped_without_k} skipped because they report no k` : ""}.
             </p>
             <table>
-              <thead><tr><th>Kind</th><th>Material</th><th>Dataset</th><th>n</th><th>k</th><th>At λ</th><th>Source</th></tr></thead>
+              <thead><tr><th>Kind</th><th>Database</th><th>Material</th><th>Dataset</th><th>n</th><th>k</th><th>At λ</th><th>Source</th></tr></thead>
               <tbody>
                 {optical.results.map((h) => (
-                  <tr key={h.dataset_id}>
+                  <tr key={`${h.release ?? ""}:${h.dataset_id}`}>
                     <td><KindBadge kind={h.cnms.kind} reviewStatus={h.review} /></td>
-                    <td>{h.material}</td><td>{h.label || "(unlabelled)"}</td>
+                    <td>{h.release ?? "—"}</td><td>{h.material}</td><td>{h.label || "(unlabelled)"}</td>
                     <td>{h.n?.toPrecision(4) ?? "—"}</td><td>{h.k?.toPrecision(3) ?? "not reported"}</td>
                     <td>{h.interpolated ? `interpolated between ${h.between_nm?.[0]} and ${h.between_nm?.[1]} nm` : "tabulated point"}</td>
                     <td>{h.doi ?? "—"}</td>
@@ -228,7 +242,7 @@ export default function WorkflowPage() {
 
       {selected && (
         <div className="panel">
-          <h2>2. Evidence and conditions: {selected.name}</h2>
+          <h2>2. Evidence and conditions: {selected.name}{selected.release ? ` (${selected.release})` : ""}</h2>
           <Refusal text={evidence.error} />
           {ev && (
             <table>
@@ -249,7 +263,7 @@ export default function WorkflowPage() {
                     <td>{d.source?.doi ?? d.source?.title ?? "—"}</td>
                     <td>{d.optical ? `${d.optical.wavelength_nm[0]}–${d.optical.wavelength_nm[1]} nm, ${d.optical.rows} rows${d.optical.k_missing_rows ? `, k missing in ${d.optical.k_missing_rows}` : ""}` : "—"}</td>
                     <td>{Object.entries(d.conditions).filter(([, c]) => c.state === "stated").map(([k, c]) => `${k}=${c.value}${c.unit ? ` ${c.unit}` : ""}`).join(", ") || "none stated"}</td>
-                    <td>{d.family === "optical" && <button onClick={() => { setPickedDataset(d); readiness.run(selected.material_id, d.dataset_id); }}>Use this dataset</button>}</td>
+                    <td>{d.family === "optical" && <button onClick={() => { setPickedDataset(d); readiness.run(selected.material_id, d.dataset_id, selected.release); }}>Use this dataset</button>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -267,7 +281,7 @@ export default function WorkflowPage() {
               </>
             )}
             temperature (°C, optional) <input style={{ width: 70 }} value={temperature} onChange={(e) => setTemperature(e.target.value)} />{" "}
-            <button disabled={readiness.busy} onClick={() => readiness.run(selected.material_id, pickedDataset ? pickedDataset.dataset_id : null)}>Check readiness</button>
+            <button disabled={readiness.busy} onClick={() => readiness.run(selected.material_id, pickedDataset ? pickedDataset.dataset_id : null, selected.release)}>Check readiness</button>
           </p>
           {pickedDataset && <p className="hint">Checking dataset #{pickedDataset.dataset_id} only. <button onClick={() => setPickedDataset(null)}>Use the whole material</button></p>}
           <Refusal text={readiness.error} />
@@ -296,28 +310,29 @@ export default function WorkflowPage() {
             disabled={!selected}
             onClick={() =>
               selected &&
-              setLayers([...layers, { material: selected.name, dataset_label: pickedDataset?.label || undefined, thickness: thickness ? Number(thickness) : undefined, roughness: roughness ? Number(roughness) : undefined }])
+              setLayers([...layers, { release: selected.release, material: selected.name, dataset_label: pickedDataset?.label || undefined, thickness: thickness ? Number(thickness) : undefined, roughness: roughness ? Number(roughness) : undefined }])
             }
           >
             Add layer
           </button>
         </p>
         <table>
-          <thead><tr><th>#</th><th>Material</th><th>Dataset</th><th>Thickness Å</th><th>Roughness Å</th><th>Entered by you</th><th /></tr></thead>
+          <thead><tr><th>#</th><th>Database</th><th>Material</th><th>Dataset</th><th>Thickness Å</th><th>Roughness Å</th><th>Entered by you</th><th /></tr></thead>
           <tbody>
             {layers.map((l, i) => (
               <tr key={i}>
-                <td>{i + 1}</td><td>{l.material}</td><td>{l.dataset_label ?? "(must be unambiguous)"}</td>
+                <td>{i + 1}</td><td>{l.release ?? "—"}</td><td>{l.material}</td><td>{l.dataset_label ?? "(must be unambiguous)"}</td>
                 <td>{l.thickness ?? "—"}</td><td>{l.roughness ?? "—"}</td>
                 <td><KindBadge kind="user_assumption" /></td>
                 <td><button onClick={() => setLayers(layers.filter((_, j) => j !== i))}>Remove</button></td>
               </tr>
             ))}
-            <tr><td>sub</td><td colSpan={5}>substrate <input value={substrate} onChange={(e) => setSubstrate(e.target.value)} /></td><td /></tr>
+            <tr><td>sub</td><td colSpan={6}>substrate <input value={substrate} onChange={(e) => setSubstrate(e.target.value)} />{bundleRelease ? ` (looked up in ${bundleRelease})` : ""}</td><td /></tr>
           </tbody>
         </table>
         <p>
-          <button disabled={!layers.length || bundle.busy} onClick={async () => { const r = await bundle.run(); if (r) download(r.blob); }}>
+          {mixedReleases && <span className="badge bad">A bundle is built from one database. Remove the layers that come from another.</span>}{" "}
+          <button disabled={!layers.length || bundle.busy || mixedReleases} onClick={async () => { const r = await bundle.run(); if (r) download(r.blob); }}>
             Build strict ModalFit bundle ({technique})
           </button>
         </p>

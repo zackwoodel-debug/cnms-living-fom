@@ -27,6 +27,13 @@ Everything runs on your machine except, optionally, the database:
    ```
    MATERIALS_DB_RELEASE=release/materials-db-v0.24.0 PYTHONPATH=src uvicorn materials_db.access.http:app --host 127.0.0.1 --port 8000
    ```
+   To serve several databases together (for example the curated release and the JARVIS-DFT calculated shard), name them:
+   ```
+   MATERIALS_DB_RELEASES="curated=release/materials-db-v0.26.0,jarvis=release/materials-db-jarvis-2025.09.24/materials-db-jarvis-dft-3d-2025.09.24.sqlite" \
+     PYTHONPATH=src uvicorn materials_db.access.http:app --host 127.0.0.1 --port 8000
+   ```
+   Material and dataset ids are only unique inside one database, so every answer names its `release` and every call that takes an id takes the release too (the first one is the default).
+   A search without a release looks in all of them; a ModalFit bundle is built from one database (the exporter reads one), so a stack cannot mix layers from two.
 2. CNMS API (this repo): `make install`, then run the backend as usual; set `MATERIALS_DB_URL` in `.env` if the service is not at `http://127.0.0.1:8000`.
 3. Frontend: `cd frontend && npm install && npm run dev`, open the **Workflow** tab.
 4. ModalFit: run it from its own checkout (pinned commit in the materials-db docs); it opens the bundle zip this page downloads.

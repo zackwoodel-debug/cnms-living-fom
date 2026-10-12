@@ -252,6 +252,7 @@ export type BadgeKind =
   | "unknown";
 
 export interface SuiteMaterial {
+  release?: string;
   material_id: number;
   name: string;
   formula: string | null;
@@ -289,6 +290,7 @@ export interface SuiteReadiness {
 }
 
 export interface OpticalHit {
+  release?: string;
   material_id: number;
   material: string;
   dataset_id: number;
@@ -314,6 +316,7 @@ export interface OpticalSearchResult {
 }
 
 export interface SuiteLayer {
+  release?: string;
   material: string;
   dataset_label?: string;
   thickness?: number;
@@ -321,6 +324,7 @@ export interface SuiteLayer {
 }
 
 export interface BundleRequest {
+  release?: string;
   layers: SuiteLayer[];
   substrate: string;
   techniques: string[];
@@ -381,14 +385,26 @@ export const api = {
     reference_descriptors?: Record<string, number>;
   }) => post<MediationResponse>("/fom/mediate", body),
 
-  suiteInfo: () => get<{ version: string; materials: number; datasets: number; reviews: number; datasets_by_provenance: Record<string, number> }>("/suite/info"),
-  suiteMaterials: (q: string) => get<SuiteMaterial[]>(`/suite/materials?q=${encodeURIComponent(q)}&limit=50`),
+  suiteInfo: () =>
+    get<{
+      version: string;
+      materials: number;
+      datasets: number;
+      reviews: number;
+      datasets_by_provenance: Record<string, number>;
+      default_release?: string;
+      releases?: Record<string, { version: string; materials: number; datasets: number; reviews: number }>;
+    }>("/suite/info"),
+  suiteMaterials: (q: string, release?: string) =>
+    get<SuiteMaterial[]>(`/suite/materials?q=${encodeURIComponent(q)}&limit=50${release ? `&release=${encodeURIComponent(release)}` : ""}`),
   opticalSearch: (p: Record<string, string | number | boolean | undefined>) => {
     const query = new URLSearchParams(Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]));
     return get<OpticalSearchResult>(`/suite/optical/search?${query}`);
   },
-  suiteEvidence: (id: number) => get<SuiteEvidence>(`/suite/materials/${id}/evidence`),
+  suiteEvidence: (id: number, release?: string) =>
+    get<SuiteEvidence>(`/suite/materials/${id}/evidence${release ? `?release=${encodeURIComponent(release)}` : ""}`),
   suiteReadiness: (body: {
+    release?: string;
     selection: { material_id?: number; dataset_id?: number };
     technique: string;
     window?: { wavelength_nm: [number, number] } | null;

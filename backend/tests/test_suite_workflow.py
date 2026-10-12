@@ -178,3 +178,27 @@ def test_wavelength_search_is_proxied_filtered_and_labelled(client):
     assert r.status_code == 200 and seen["k_min"] == "1.0" and seen["approved_only"] == "true" and "n_min" not in seen
     hit = r.json()["results"][0]
     assert hit["cnms"] == {"label": "literature_measured (reviewed)", "kind": "reference_literature", "reviewed": True} and hit["interpolated"] is True
+
+
+def test_the_release_is_passed_through_every_call_that_has_ids(client):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, dict(request.url.params), json.loads(request.content) if request.content else None))
+        if request.url.path == "/suite/bundle":
+            return httpx.Response(200, content=b"PK", headers={"x-bundle-summary": json.dumps({"release": "shard", "mode": "strict"})})
+        if request.url.path.endswith("/evidence"):
+            return httpx.Response(200, json={"material": {"material_id": 1, "name": "x", "formula": None}, "datasets": [], "release": "shard"})
+        if request.url.path == "/suite/readiness":
+            return httpx.Response(200, json={"status": "ready", "reasons": [], "notes": [], "datasets": [], "candidates": [], "excluded": [], "unchecked": [], "release": "shard"})
+        return httpx.Response(200, json=[] if request.url.path == "/suite/materials" else {"results": [], "truncated": False, "datasets_spanning_wavelength": 0, "skipped_without_k": 0, "note": "n"})
+
+    app.dependency_overrides[suite_router.get_client] = lambda: MaterialsDbClient("http://x", transport=httpx.MockTransport(handler))
+    client.get("/suite/materials", params={"q": "Si", "release": "shard"})
+    client.get("/suite/materials/7/evidence", params={"release": "shard"})
+    client.post("/suite/readiness", json={"release": "shard", "selection": {"material_id": 7}, "technique": "XRR"})
+    client.post("/suite/bundle", json={"release": "shard", "layers": [{"material": "x"}], "techniques": ["XRR"]})
+    client.get("/suite/optical/search", params={"wavelength_nm": 633, "release": "shard"})
+    assert [s[2].get("release") if s[0] == "GET" else s[3]["release"] for s in seen] == ["shard"] * 5
+    client.get("/suite/materials", params={"q": "Si"})
+    assert "release" not in seen[-1][2]                      # no release given: the service decides (all releases)
