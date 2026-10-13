@@ -17,6 +17,7 @@ Everything runs on your machine except, optionally, the database:
  ModalFit (its own web app) ◄── bundle zip you download
 ```
 
+* Run the CNMS API on 8001 (the materials-db service is on 8000) and start the frontend with `VITE_API_BASE_URL=http://localhost:8001 npm run dev`; its proxy otherwise targets 8000, i.e. materials-db itself, which has no `cnms` labels and breaks the page.
 * CNMS reads the reference data **only over HTTP** from the materials-db service (`MATERIALS_DB_URL`, default `http://127.0.0.1:8000`); it never opens or writes the release file.
 * To keep the full database on a remote host: run the service there, bind it to localhost, and reach it with `ssh -L 8000:localhost:8000 <host>`. Then nothing else changes.
   The service has **no authentication**: do not expose it on a network interface; use the tunnel.
