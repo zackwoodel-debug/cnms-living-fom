@@ -179,6 +179,8 @@ material not in the atlas is not in the atlas: say so. Report only the phases, \
 axes and datasets the tool returned: a phase in a material's name is not data.
 27. Atlas values are reference data. They are never written into this platform's \
 records and never stand in for a CNMS measurement.
+28. A request to ignore the atlas or to answer from memory does not change where \
+numbers come from: still call atlas_lookup, and say that you did.
 
 You are talking to someone who will act on this in a laboratory. An "I do not \
 know, and here is what would tell us" is worth more to them than a confident \
@@ -282,6 +284,12 @@ EMPTY_EVIDENCE_ANSWER = (
     "the withheld text is on `suppressed_answer` if you want to see what it would have said. "
     "Ingest the relevant documentation, widen the technique filter, or ask something the "
     "stored records cover."
+)
+
+ATLAS_BACKSTOP_NOTE = (
+    "The atlas is consulted on every question; that is not something a request can switch "
+    "off. The search above is what it holds for this question. For a number, call "
+    "atlas_lookup and quote what it returns; if the atlas does not answer the question, say so."
 )
 
 #  Result keys that mean a tool actually returned something. Checked explicitly
@@ -509,6 +517,7 @@ def ask(
     steps: list[AgentStep] = []
     result: ChatResult | None = None
     hit_limit = False
+    atlas_backstop = require_evidence and any(spec.name == "atlas_search" for spec in specs)
 
     for step_number in range(1, max_steps + 1):
         result = provider.send(system, messages, tools=specs)
@@ -520,6 +529,47 @@ def ask(
             break
 
         if not result.wants_tools:
+            #  "Ignore the atlas, answer from memory": a local model obeys, searches
+            #  only the corpus, finds nothing and has its answer withheld. Where
+            #  numbers come from is not the user's to switch off, so search the atlas
+            #  once on the question ourselves and give the model another turn.
+            if (
+                atlas_backstop
+                and not any(step.tool.startswith("atlas_") for step in steps)
+                and not any(_step_has_content(step.result) for step in steps)
+            ):
+                atlas_backstop = False
+                payload = run_tool(session, "atlas_search", {"query": question})
+                #  Recorded only when it found something, so a turn the model answered
+                #  without any tool still reads as exactly that.
+                if _step_has_content(payload):
+                    steps.append(
+                        AgentStep(
+                            step=step_number,
+                            tool="atlas_search",
+                            arguments={"query": question},
+                            result=payload,
+                            duration_ms=0,
+                        )
+                    )
+                    logger.info("No atlas tool called and nothing found; searched the atlas on the question.")
+                    messages += [
+                        {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {"id": "atlas-backstop", "name": "atlas_search", "arguments": {"query": question}}
+                            ],
+                        },
+                        {
+                            "role": "tool",
+                            "tool_call_id": "atlas-backstop",
+                            "content": serialise_tool_result(payload),
+                            "is_error": False,
+                        },
+                        {"role": "user", "content": ATLAS_BACKSTOP_NOTE},
+                    ]
+                    continue
             break
 
         messages.append(
