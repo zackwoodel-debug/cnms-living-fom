@@ -245,6 +245,13 @@ export default function WorkflowPage() {
         <div className="panel">
           <h2>2. Evidence and conditions: {selected.name}{selected.release ? ` (${selected.release})` : ""}</h2>
           <Refusal text={evidence.error} />
+          {ev?.structure && (
+            <p className="hint">
+              Calculated structure: a={ev.structure.a?.toFixed(3)} b={ev.structure.b?.toFixed(3)} c={ev.structure.c?.toFixed(3)} Å, α/β/γ={ev.structure.alpha?.toFixed(1)}/{ev.structure.beta?.toFixed(1)}/{ev.structure.gamma?.toFixed(1)}°,
+              space group {ev.structure.spacegroup_number}, {ev.structure.nsites} sites.
+              {ev.calculated_properties && ` ${ev.calculated_properties.functional}: band gap ${ev.calculated_properties.band_gap_ind_ev} eV (indirect), energy above hull ${ev.calculated_properties.e_above_hull_ev} eV/atom.`}
+            </p>
+          )}
           {ev && (
             <table>
               <thead>
@@ -262,7 +269,13 @@ export default function WorkflowPage() {
                       {d.open_findings.map((f) => <div key={f.finding_id} className="badge warn">{f.message ?? f.code}</div>)}
                     </td>
                     <td>{d.source?.doi ?? d.source?.title ?? "—"}</td>
-                    <td>{d.optical ? `${d.optical.wavelength_nm[0]}–${d.optical.wavelength_nm[1]} nm, ${d.optical.rows} rows${d.optical.k_missing_rows ? `, k missing in ${d.optical.k_missing_rows}` : ""}` : "—"}</td>
+                    <td>
+                      {d.optical
+                        ? `${d.optical.wavelength_nm[0]}–${d.optical.wavelength_nm[1]} nm, ${d.optical.rows} rows${d.optical.k_missing_rows ? `, k missing in ${d.optical.k_missing_rows}` : ""}`
+                        : d.values
+                          ? [d.values.density_g_cm3 != null ? `density ${d.values.density_g_cm3.toPrecision(4)} g/cm³` : null, d.values.xray_sld != null ? `x-ray SLD ${d.values.xray_sld.toPrecision(4)}` : null, d.values.neutron_sld != null ? `neutron SLD ${d.values.neutron_sld.toPrecision(4)}` : null].filter(Boolean).join(", ")
+                          : "—"}
+                    </td>
                     <td>{Object.entries(d.conditions).filter(([, c]) => c.state === "stated").map(([k, c]) => `${k}=${c.value}${c.unit ? ` ${c.unit}` : ""}`).join(", ") || "none stated"}</td>
                     <td>{d.family === "optical" && <button onClick={() => { setPickedDataset(d); readiness.run(selected.material_id, d.dataset_id, selected.release); }}>Use this dataset</button>}</td>
                   </tr>
