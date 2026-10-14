@@ -282,6 +282,10 @@ def _lookup_property_values(
         "note": (
             "Each row is one measurement in one context. Values under different contexts are not "
             "alternatives to be averaged — report them separately with their conditions."
+            if rows
+            else "No CNMS measurement matches. This tool holds the platform's own records; for "
+            "published reference values (n and k, density, SLD, calculated dielectric constants) "
+            "call atlas_lookup."
         ),
     }
 

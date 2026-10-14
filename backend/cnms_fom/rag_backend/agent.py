@@ -31,15 +31,22 @@ gap, not another retrieval.
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 import time
 from dataclasses import dataclass, field
 
 from cnms_fom.config import get_settings
 from cnms_fom.db.enums import SynthesisTechnique
 
+from .answer_checks import unsupported_claims, unsupported_numbers  # noqa: F401 - re-exported
+from .compose import (
+    FRAMING_SYSTEM,
+    atlas_reference,
+    framing_messages,
+    reference_block,
+    rests_only_on_atlas,
+    template_framing,
+)
 from .providers import ChatProvider, ChatResult, get_provider, serialise_tool_result
 from .tools import run_tool, tool_specs, write_tool_names
 
@@ -219,6 +226,14 @@ class AgentAnswer:
     suppressed_answer: str | None = None
     #  Numbers in the answer that no tool returned. Named in the answer itself too.
     unsupported_numbers: list[str] = field(default_factory=list)
+    #  Ids, grades, agreement classes, phases or axes the answer asserted and no tool returned.
+    unsupported_claims: list[str] = field(default_factory=list)
+    #  Atlas values quoted verbatim under the answer (see compose.py).
+    reference_values: list[str] = field(default_factory=list)
+    #  True when the answer is a checked framing plus those verbatim values.
+    composed: bool = False
+    #  The words the model wrote that the reader sees (framing, or the whole answer).
+    model_text: str = ""
 
     @property
     def tools_used(self) -> list[str]:
@@ -243,6 +258,10 @@ class AgentAnswer:
             "usage": self.usage,
             "suppressed_answer": self.suppressed_answer,
             "unsupported_numbers": self.unsupported_numbers,
+            "unsupported_claims": self.unsupported_claims,
+            "reference_values": self.reference_values,
+            "composed": self.composed,
+            "model_text": self.model_text,
         }
 
 
@@ -387,53 +406,6 @@ def _searched(steps: list[AgentStep]) -> str:
         said = result.get("error") or result.get("note") or "no result"
         lines.append(f"- {step.tool}({args}): {said}")
     return "\n".join(lines)
-
-
-#  A number as written in an answer: dotted versions ("0.22.0") stay one token.
-_ANSWER_NUMBER = re.compile(r"(?<![\w.])[-−]?\d+(?:\.\d+)*(?:[eE][-+]?\d+)?(?![\w])")
-#  Every number inside the evidence, wherever it sits ("n_633nm", "JOSA.55.001205").
-_EVIDENCE_NUMBER = re.compile(r"\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
-
-
-def unsupported_numbers(answer: str, steps: list[AgentStep], question: str = "") -> list[str]:
-    """Numbers in the answer that no tool result (and not the question) contains.
-
-    Supported: a version or an integer that appears anywhere in the evidence (a page number
-    inside a DOI, the 633 in n_633nm), and a decimal equal to a returned value or a rounding
-    of one at the precision written ("1.33" for 1.331790355). Small integers (counts, "2
-    sources") are left alone. What remains is what a model invented, the failure FOM_PROOF
-    Sec. 15.2 is written against.
-    """
-    evidence = " ".join(json.dumps(step.result, default=str, ensure_ascii=False) for step in steps)
-    evidence += " " + question
-    known: list[float] = []
-    for token in _EVIDENCE_NUMBER.findall(evidence):
-        try:
-            known.append(float(token))
-        except ValueError:
-            continue
-    out: list[str] = []
-    for match in _ANSWER_NUMBER.finditer(answer):
-        token = match.group(0).replace("−", "-")
-        if token in out:
-            continue
-        bare = token.lstrip("-")
-        if bare.count(".") > 1:
-            if bare not in evidence:
-                out.append(token)
-            continue
-        if "." not in bare and "e" not in bare.lower():
-            if int(bare) < 100 or bare in evidence:
-                continue
-        elif bare in evidence:
-            continue
-        value = float(token)
-        decimals = len(bare.split(".")[1].split("e")[0].split("E")[0]) if "." in bare else 0
-        half = 0.5 * 10 ** (-decimals)
-        if any(abs(candidate - abs(value)) <= half * (1 + 1e-9) for candidate in known):
-            continue
-        out.append(token)
-    return out
 
 
 def _evidence_was_insufficient(steps: list[AgentStep], answer: str) -> bool:
@@ -637,14 +609,68 @@ def ask(
             insufficient = True
 
     unsupported: list[str] = []
+    claims: list[str] = []
+    reference: list[str] = []
+    composed = False
+    model_text = answer_text
+    model_gap = (
+        bool(steps)
+        and insufficient
+        and not (result is not None and result.refused)
+        and answer_text not in (NO_EVIDENCE_ANSWER,)
+        and not answer_text.startswith(EMPTY_EVIDENCE_ANSWER)
+    )
+    if model_gap:
+        #  The model reported a gap, but atlas tools returned facts (an absence and the
+        #  release's reason for it, a status): those are quoted under its words, verbatim.
+        reference, _notes, origin = atlas_reference(steps)
+        if reference:
+            unsupported = unsupported_numbers(answer_text, steps, question)
+            claims = unsupported_claims(answer_text, steps, question)
+            if unsupported:
+                answer_text += (
+                    "\n\n[Unsupported numbers: " + ", ".join(unsupported) + " — no tool returned these. "
+                    "Do not rely on them; the evidence trail holds every value a tool did return.]"
+                )
+            if claims:
+                answer_text += "\n\n[Unsupported claims: " + "; ".join(claims) + ".]"
+            answer_text += "\n\n" + reference_block(reference, origin)
     if steps and not insufficient:
-        unsupported = unsupported_numbers(answer_text, steps, question)
-        if unsupported:
-            #  The text is what a person reads, so the warning goes in the text.
-            answer_text += (
-                "\n\n[Unsupported numbers: " + ", ".join(unsupported) + " — no tool returned these. "
-                "Do not rely on them; the evidence trail holds every value a tool did return.]"
-            )
+        reference, notes, origin = atlas_reference(steps)
+        if reference and rests_only_on_atlas(steps, _step_has_content):
+            #  The facts are written by code; the model only frames them (compose.py).
+            framing = ""
+            try:
+                framing = provider.send(FRAMING_SYSTEM, framing_messages(question, reference, notes)).text.strip()
+            except Exception as exc:  # noqa: BLE001 - a framing is optional; the values are not
+                logger.warning("Framing call failed (%s); using the template framing.", exc)
+            bad = (unsupported_numbers(framing, steps, question) + unsupported_claims(framing, steps, question)) if framing else []
+            draft = answer_text
+            if not framing or bad:
+                if framing:
+                    logger.warning("Framing withheld: %s", "; ".join(bad))
+                suppressed = draft + (
+                    f"\n\n[withheld framing — {'; '.join(bad)}]\n{framing}" if framing else ""
+                )
+                framing = template_framing(steps)
+            else:
+                suppressed = draft
+            model_text = framing
+            answer_text = framing + "\n\n" + reference_block(reference, origin)
+            composed = True
+        else:
+            unsupported = unsupported_numbers(answer_text, steps, question)
+            claims = unsupported_claims(answer_text, steps, question)
+            #  The text is what a person reads, so the warnings go in the text.
+            if unsupported:
+                answer_text += (
+                    "\n\n[Unsupported numbers: " + ", ".join(unsupported) + " — no tool returned these. "
+                    "Do not rely on them; the evidence trail holds every value a tool did return.]"
+                )
+            if claims:
+                answer_text += "\n\n[Unsupported claims: " + "; ".join(claims) + ".]"
+            if reference:
+                answer_text += "\n\n" + reference_block(reference, origin)
 
     return AgentAnswer(
         question=question,
@@ -661,6 +687,10 @@ def ask(
         usage=result.usage if result else {},
         suppressed_answer=suppressed,
         unsupported_numbers=unsupported,
+        unsupported_claims=claims,
+        reference_values=reference,
+        composed=composed,
+        model_text=model_text,
     )
 
 

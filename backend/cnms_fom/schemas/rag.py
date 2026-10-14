@@ -245,6 +245,19 @@ class ChatResponse(BaseModel):
         default_factory=list,
         description="Numbers in the answer that no tool returned; also named in the answer text.",
     )
+    unsupported_claims: list[str] = Field(
+        default_factory=list,
+        description="Ids, grades, agreement classes, phases or axes the answer asserted and no tool "
+        "returned; also named in the answer text.",
+    )
+    reference_values: list[str] = Field(
+        default_factory=list,
+        description="Atlas values quoted verbatim under the answer, one line each.",
+    )
+    composed: bool = Field(
+        default=False,
+        description="True when the answer is a checked framing plus the verbatim reference values.",
+    )
     disclaimer: str = (
         "Retrieval output is for reading, not for data entry. FOM_PROOF Sec. 2.3: a missing "
         "property may not be filled from a plausible number. Fitted values enter the analysis "

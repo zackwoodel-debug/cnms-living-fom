@@ -26,6 +26,7 @@ import json
 import re
 
 from .reader import AtlasIndex
+from .vocabulary import AXIS_WORDS, PHASE_WORDS, phases_in
 
 ATTRIBUTION = (
     "Data: materials-db, CC BY 4.0. Cite materials-db and each value's own source; the atlas note "
@@ -100,11 +101,26 @@ MISSING_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 
+#  "n at 1550 nm", "n_1550nm", "extinction coefficient at 405 nm".
+_AT_WAVELENGTH = re.compile(
+    r"^(n|k|refractive index|index of refraction|extinction coefficient)\s*(?:at\s*)?(\d+(?:\.\d+)?)\s*nm$"
+)
+
+
 def normalise_quantity(quantity: str | None) -> str | None:
-    """'refractive index' -> 'n_633nm', 'x-ray SLD' -> 'xray_sld'; None when unknown."""
+    """'refractive index' -> 'n_633nm', 'x-ray SLD' -> 'xray_sld'; None when unknown.
+
+    n or k at another wavelength comes back as 'n@1550' / 'k@405': the atlas stores those
+    quantities as scalars at 633 nm only, and says so rather than failing or interpolating.
+    """
     if quantity is None or not str(quantity).strip():
         return "all"
     raw = _norm(quantity)
+    at = _AT_WAVELENGTH.match(raw.replace("_", " "))
+    if at:
+        letter = "k" if at.group(1) in ("k", "extinction coefficient") else "n"
+        wavelength = float(at.group(2))
+        return f"{letter}_633nm" if wavelength == 633 else f"{letter}@{at.group(2)}"
     for candidate in (raw, raw.replace(" ", "_"), raw.replace("-", " "), raw.replace("_", " ")):
         if candidate in QUANTITIES:
             return candidate
@@ -378,6 +394,31 @@ QUALIFIERS = frozenset(
 )
 
 
+def _carried_phases(atlas: AtlasIndex, entry: dict) -> set[str]:
+    """Phases a record's datasets, key and values are labelled with: what its data cover."""
+    labels = [d["dataset_label"] for d in atlas.query("SELECT dataset_label FROM datasets WHERE note_id = ?", (entry["note_id"],))]
+    return phases_in(" ".join([*labels, entry.get("key") or "", *(v.get("label") or "" for v in entry["values"])]))
+
+
+def _name_phase_caveat(atlas: AtlasIndex, entry: dict) -> str | None:
+    """A line when a material's name mentions a phase none of its datasets or values carries.
+
+    "Titanium dioxide (rutile / anatase)" holds rutile data only; a model reading the name
+    reports anatase data. Saying so in the result is cheaper than hoping it notices.
+    """
+    named = phases_in(entry["material"])
+    if not named:
+        return None
+    missing = sorted(named - _carried_phases(atlas, entry))
+    if not missing:
+        return None
+    words = " or ".join(missing)
+    return (
+        f"{entry['material']} (id {entry['material_id']}): its name mentions {', '.join(missing)}, but no dataset or "
+        f"value in materials-db v{atlas.version} is labelled {words}; a phase in a name is not data"
+    )
+
+
 def _named_matches(atlas: AtlasIndex, text: str) -> list[dict]:
     """Materials named inside the text ('liquid water'), when every other word only qualifies them.
 
@@ -410,9 +451,31 @@ def _named_matches(atlas: AtlasIndex, text: str) -> list[dict]:
                      "matched_on": [f"{r['kind']} named inside {text!r}: {phrase!r}"]},
                 )
     leftover = [w for i, w in enumerate(words) if i not in covered and w]
-    if any(w.casefold() not in QUALIFIERS and not w.replace(".", "", 1).isdigit() for w in leftover):
+    allowed = QUALIFIERS | PHASE_WORDS | AXIS_WORDS
+    if any(w.casefold() not in allowed and not w.replace(".", "", 1).isdigit() for w in leftover):
         return []
     return list(found.values())
+
+
+def _wavelength_lines(entry: dict, q: str, version: str) -> list[str]:
+    """What the atlas can say about n or k at a wavelength it stores no scalar for."""
+    letter, wavelength = q.split("@")
+    nm = float(wavelength)
+    who = f"{entry['material']} (id {entry['material_id']})"
+    lines = [
+        f"{who}: no scalar {letter} at {wavelength} nm is stored; materials-db v{version} stores {letter} as a single "
+        f"value at 633 nm only, and the atlas never interpolates"
+    ]
+    covering = [d for d in entry.get("datasets", []) if d["range_nm"][0] <= nm <= d["range_nm"][1]]
+    for d in covering:
+        lines.append(
+            f"{who}: dataset {d['label']} ({d['kind'].replace('_', ' ')}) has stored rows from {d['range_nm'][0]} to "
+            f"{d['range_nm'][1]} nm, which spans {wavelength} nm; read its rows (atlas_read, section Optical datasets "
+            "or Get the data)"
+        )
+    if not covering:
+        lines.append(f"{who}: no dataset in materials-db v{version} spans {wavelength} nm")
+    return lines
 
 
 def lookup(atlas: AtlasIndex, material: str, quantity: str | None = "all") -> dict:
@@ -451,26 +514,29 @@ def lookup(atlas: AtlasIndex, material: str, quantity: str | None = "all") -> di
             )
         return payload
 
+    at_wavelength = "@" in q
+    wanted = () if at_wavelength else QUANTITIES[q]
     out = []
     for m in matches[:MAX_MATCHES]:
         note = atlas.query("SELECT frontmatter FROM notes WHERE note_id = ?", (m["note_id"],))[0]
         fm = json.loads(note["frontmatter"])
-        placeholders = ",".join("?" for _ in QUANTITIES[q])
+        placeholders = ",".join("?" for _ in wanted) or "NULL"
         rows = atlas.query(
             f'SELECT * FROM "values" WHERE note_id = ? AND quantity IN ({placeholders}) ORDER BY value_id',
-            (m["note_id"], *QUANTITIES[q]),
+            (m["note_id"], *wanted),
         )
         entry = {
             **m,
             "key": fm.get("key"),
             "formula": fm.get("formula"),
             "family": fm.get("family"),
+            "k_status": fm.get("k_status"),
             "values": [_value_row(atlas, r) for r in rows],
         }
         missing = {k: v for k, v in fm.get("missing", {}).items() if q == "all" or k in MISSING_KEYS.get(q, ())}
         if missing:
             entry["missing"] = missing
-        if q in ("n_633nm", "k_633nm", "k_status", "all"):
+        if q in ("n_633nm", "k_633nm", "k_status", "all") or at_wavelength:
             entry["datasets"] = [
                 {
                     "label": d["dataset_label"],
@@ -486,10 +552,31 @@ def lookup(atlas: AtlasIndex, material: str, quantity: str | None = "all") -> di
             ]
         out.append(entry)
     summary = []
+    asked = phases_in(material) if resolved_inside else set()
     for entry in out:
+        if at_wavelength:
+            summary += _wavelength_lines(entry, q, atlas.version)
         summary += [_quote(entry, v, atlas.version) for v in entry["values"]]
+        caveat = _name_phase_caveat(atlas, entry)
+        if caveat:
+            summary.append(caveat)
+        unmet = sorted(asked - _carried_phases(atlas, entry) - phases_in(entry["material"]))
+        if unmet:
+            summary.append(
+                f"{entry['material']} (id {entry['material_id']}): the question names {', '.join(unmet)}, but no "
+                f"dataset or value of this material in materials-db v{atlas.version} is labelled {' or '.join(unmet)}"
+            )
         for key, reason in entry.get("missing", {}).items():
             summary.append(f"{entry['material']} (id {entry['material_id']}): no {key} in materials-db v{atlas.version} — {reason}")
+        if not at_wavelength and not entry["values"] and not entry.get("missing") and q != "all":
+            summary.append(f"{entry['material']} (id {entry['material_id']}): no stored {q} in materials-db v{atlas.version}")
+        if q == "k_633nm" and not any(v["quantity"] == "k_status" for v in entry["values"]):
+            status = entry.get("k_status")
+            if status:
+                summary.append(
+                    f"{entry['material']} (id {entry['material_id']}): k status = {status}; a missing k is unknown, "
+                    f"not 0 (materials-db v{atlas.version})"
+                )
     payload = _envelope(atlas, material=material, quantity=q)
     notes = []
     if len(matches) > 1:
@@ -586,4 +673,18 @@ def coverage(atlas: AtlasIndex, material: str | None = None) -> dict:
                 "missing": fm.get("missing", {}),
             }
         )
-    return _envelope(atlas, material=material, coverage=out, ambiguous=len(matches) > 1)
+    summary = []
+    for c in out:
+        who = f"{c['material']} (id {c['material_id']})"
+        lo, hi = c["wavelength_range_nm"]
+        span = f" covering {lo}-{hi} nm" if lo is not None else ""
+        summary.append(
+            f"{who}: {c['optical_datasets']} optical dataset{'' if c['optical_datasets'] == 1 else 's'} "
+            f"({c['measured_datasets']} measured, {c['model_fit_datasets']} model "
+            f"fit{'' if c['model_fit_datasets'] == 1 else 's'}){span}; k status {c['k_status']}; density {c['density_kind']}; "
+            f"n at 633 nm grades {', '.join(c['n_633nm_grades'] or []) or 'none'}; stored values: "
+            f"{', '.join(c['quantities_with_values']) or 'none'} (materials-db v{atlas.version})"
+        )
+        for key, reason in (c["missing"] or {}).items():
+            summary.append(f"{who}: no {key} in materials-db v{atlas.version} — {reason}")
+    return _envelope(atlas, material=material, summary=summary, coverage=out, ambiguous=len(matches) > 1)
