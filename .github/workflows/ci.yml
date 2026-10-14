@@ -64,6 +64,11 @@ jobs:
         # The tests that need the materials-db release skip without it, and say so.
         run: pytest -q -rs materials-atlas/tests
 
+      - name: Atlas evals, gated (on the fixture index; questions it cannot answer are skipped)
+        run: >-
+          python materials-atlas/evals/run_evals.py --suite full --skip-missing --gate
+          --index backend/tests/fixtures/atlas/index/atlas_index.sqlite
+
   # ---------------------------------------------------------------------------
   postgres:
     name: Migrations + tests (Postgres)

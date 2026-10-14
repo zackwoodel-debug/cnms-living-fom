@@ -259,19 +259,49 @@ def test_the_index_is_opened_read_only():
 # --- in the assistant loop ---------------------------------------------------------------------------
 
 
-def test_an_atlas_answer_stands_and_cites_its_values():
+FRAMING = (
+    "Fused silica has one measured value at 633 nm; with a single source it has not been "
+    "cross-checked, so treat it as a reference value."
+)
+
+
+def test_an_atlas_answer_is_a_checked_framing_over_verbatim_values():
     provider = ScriptedProvider(
         [
             tool_reply("atlas_lookup", {"material": "fused silica", "quantity": "n_633nm"}),
-            text_reply("n at 633 nm of Silicon dioxide (fused silica), id 38, is 1.457012124643149 (grade C, reference value)."),
+            text_reply("n of fused silica is 1.457 (grade C)."),  # the loop's draft
+            text_reply(FRAMING),  # the framing call, tools withheld
         ]
     )
     answer = ask(None, "What is n of fused silica at 633 nm?", provider=provider)
-    assert answer.answer.startswith("n at 633 nm of Silicon dioxide")
-    assert answer.insufficient_context is False
+    assert answer.composed is True and answer.model_text == FRAMING
+    #  The facts are the lookup's own lines, quoted under a heading that says what they are.
+    assert answer.answer.startswith(FRAMING + "\n\n**Reference values**")
+    [line] = answer.reference_values
+    assert line.startswith("Silicon dioxide (fused silica) (id 38): n_633nm | structure:amorphous = 1.457012124643149")
+    assert line in answer.answer
+    assert answer.suppressed_answer == "n of fused silica is 1.457 (grade C)."
     [citation] = [c for c in answer.citations if c["kind"] == "atlas_value"]
     assert citation["material_id"] == 38 and citation["citable"] is True and citation["grade"] == "C"
-    assert "atlas_lookup" in provider.calls[0]["tools"]
+    #  The framing call sees the values as lines and no tools.
+    assert provider.calls[2]["tools"] == [] and "- Silicon dioxide (fused silica) (id 38)" in provider.calls[2]["messages"][0]["content"]
+
+
+def test_a_framing_that_invents_is_withheld_and_a_template_stands_in():
+    provider = ScriptedProvider(
+        [
+            tool_reply("atlas_lookup", {"material": "TiO2", "quantity": "n_633nm"}),
+            text_reply("draft"),
+            text_reply("TiO2 has rutile values, and there is anatase data too, with n near 2.49."),
+        ]
+    )
+    answer = ask(None, "n of TiO2 at 633 nm?", provider=provider)
+    assert answer.composed is True
+    assert "anatase data too" not in answer.answer and "2.49" not in answer.answer
+    assert answer.model_text.startswith("The atlas record for 'TiO2' is Titanium dioxide (rutile / anatase) (id 42).")
+    assert "[withheld framing — " in answer.suppressed_answer and "'anatase'" in answer.suppressed_answer
+    #  The verbatim lines say the name mentions anatase and no dataset is anatase.
+    assert any("its name mentions anatase, but no dataset" in line for line in answer.reference_values)
 
 
 def test_an_answer_from_an_empty_atlas_lookup_is_withheld_and_says_what_was_searched():
@@ -323,17 +353,29 @@ def test_a_compound_name_is_not_resolved_to_the_element_it_contains():
 # --- numbers the tools did not return are named in the answer -------------------------------
 
 
-def test_an_invented_number_is_flagged_in_the_answer():
+def test_with_mixed_evidence_the_answer_stays_checked_with_the_values_appended(monkeypatch):
+    """Atlas values plus a corpus passage: the model's answer connects them, so it stays."""
+    from cnms_fom.rag_backend import tools as rag_tools
+    from cnms_fom.rag_backend.providers import ToolSpec
+
+    passage = {"passages": [{"citation": "ald.pdf", "page": 2, "text": "HfO2 films were annealed."}]}
+    fake = rag_tools.Tool(spec=ToolSpec(name="search_corpus", description="x", input_schema={"type": "object"}), run=lambda session, **_: passage)
+    monkeypatch.setitem(rag_tools.TOOLS, "search_corpus", fake)
     provider = ScriptedProvider(
         [
             tool_reply("atlas_lookup", {"material": "fused silica", "quantity": "n_633nm"}),
-            text_reply("n of fused silica (id 38) is 1.457 at 633 nm, and about 1.4440 at 1550 nm."),
+            tool_reply("search_corpus", {"query": "anneal"}),
+            text_reply("Fused silica (id 38) has n 1.457, about 1.4440 at 1550 nm, grade A."),
         ]
     )
-    answer = ask(None, "n of fused silica?", provider=provider)
-    #  1.457 rounds the stored 1.457012124643149; 1.4440 and 1550 (nm) were never returned.
+    answer = ask(None, "n of fused silica, and did the films anneal?", provider=provider)
+    assert answer.composed is False
+    #  1.457 rounds the stored 1.457012124643149; 1.4440 and 1550 (nm) were never returned,
+    #  and the stored grade is C, not A.
     assert answer.unsupported_numbers == ["1.4440", "1550"]
-    assert "[Unsupported numbers: 1.4440" in answer.answer
+    assert answer.unsupported_claims == ["grade A: no returned value has that grade"]
+    assert "[Unsupported numbers: 1.4440" in answer.answer and "[Unsupported claims: grade A" in answer.answer
+    assert answer.answer.rstrip().endswith(answer.reference_values[-1])
 
 
 def test_supported_numbers_raise_no_flag():
@@ -349,3 +391,202 @@ def test_supported_numbers_raise_no_flag():
     )
     assert unsupported_numbers("J. Opt. Soc. Am. 55, 1205; atlas version 0.22.0; k at 633 nm", [cited]) == []
     assert unsupported_numbers("version 0.23.0", [cited]) == ["0.23.0"]
+
+
+# --- the claim checks ----------------------------------------------------------------------
+
+
+def _step(result, tool="atlas_lookup"):
+    from cnms_fom.rag_backend.agent import AgentStep
+
+    return AgentStep(step=1, tool=tool, arguments={}, result=result)
+
+
+def test_claims_ids_grades_and_classes():
+    from cnms_fom.rag_backend.answer_checks import unsupported_claims
+
+    step = _step({"matches": [{"material_id": 38, "values": [{"grade": "C", "classification": "single_source", "label": "n_633nm"}]}]})
+    assert unsupported_claims("Fused silica (id 38) is grade C.", [step]) == []
+    assert unsupported_claims("Fused silica (id 39) is grade A.", [step]) == [
+        "material id 39: no tool returned it",
+        "grade A: no returned value has that grade",
+    ]
+    assert unsupported_claims("The sources agree excellently, an excellent result.", [step]) == [
+        "'excellent': no returned consensus is classed excellent"
+    ]
+
+
+def test_claims_catch_agreement_where_the_release_says_suspicious():
+    from cnms_fom.rag_backend.answer_checks import unsupported_claims
+
+    step = _step({"matches": [{"material_id": 223, "values": [{"classification": "suspicious", "label": "k_633nm"}]}]})
+    assert unsupported_claims("The sources agree on k.", [step]) == [
+        "says the sources agree; the release classes them suspicious, i.e. they disagree"
+    ]
+    assert unsupported_claims("The sources disagree; they do not agree.", [step]) == []
+
+
+def test_claims_phases_and_axes_need_a_dataset_unless_negated_or_a_name():
+    from cnms_fom.rag_backend.answer_checks import unsupported_claims
+
+    step = _step(
+        {"matches": [{"material": "Titanium dioxide (rutile / anatase)", "key": "oxides_50:TiO2@rutile",
+                      "values": [{"label": "n_633nm | rutile | e-ray", "scope": "rutile | e-ray"}]}]}
+    )
+    assert unsupported_claims("Rutile e-ray data are given.", [step]) == []
+    assert unsupported_claims("There is anatase data and an o-ray value.", [step]) == [
+        "'anatase': no returned dataset or value is labelled anatase",
+        "'o-ray': no returned dataset or value is labelled o-ray",
+    ]
+    assert unsupported_claims("There is no anatase dataset.", [step]) == []
+    assert unsupported_claims("Its name mentions anatase.", [step]) == []
+
+
+def test_thinking_text_is_not_the_answer():
+    from cnms_fom.rag_backend.providers import _THINK
+
+    assert _THINK.sub("", "<think>long reasoning</think>\nThe answer.").strip() == "The answer."
+
+
+def test_a_phase_in_a_name_but_in_no_dataset_is_called_out():
+    [match] = lookup("TiO2", "n")["matches"]
+    caveats = [line for line in lookup("TiO2", "n")["summary"] if "its name mentions" in line]
+    assert caveats == [
+        "Titanium dioxide (rutile / anatase) (id 42): its name mentions anatase, but no dataset or value in "
+        "materials-db v0.22.0 is labelled anatase; a phase in a name is not data"
+    ]
+    assert match["material_id"] == 42
+
+
+# --- what the second end-to-end round showed llama3.1:8b doing ------------------------------
+
+
+def test_n_at_another_wavelength_says_what_is_stored_and_never_interpolates():
+    result = lookup("fused silica", "n at 1550 nm")
+    [match] = result["matches"]
+    assert match["material_id"] == 38 and match["values"] == []
+    assert result["summary"][0].startswith(
+        "Silicon dioxide (fused silica) (id 38): no scalar n at 1550 nm is stored"
+    )
+    assert "spans 1550 nm" in result["summary"][1]
+    assert lookup("fused silica", "n_633")["quantity"] == "n_633nm"
+    assert lookup("fused silica", "k at 633 nm")["quantity"] == "k_633nm"
+
+
+def test_a_phase_word_qualifies_a_name_and_is_answered_with_what_the_data_hold():
+    result = lookup("anatase TiO2", "n")
+    [match] = result["matches"]
+    assert match["material_id"] == 42 and "named inside" in match["matched_on"][0]
+    assert any("its name mentions anatase, but no dataset" in line for line in result["summary"])
+    #  A chemical word is still not a qualifier.
+    assert lookup("Indium nitride", "n")["matches"] == []
+
+
+def test_an_empty_platform_lookup_points_to_the_atlas(tmp_path):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    import cnms_fom.db.models  # noqa: F401
+    from cnms_fom.db.base import Base
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'empty.db'}", future=True)
+    Base.metadata.create_all(engine)
+    with sessionmaker(bind=engine, future=True)() as session:
+        result = run_tool(session, "lookup_property_values", {"formula": "C", "property_key": "density"})
+    assert result["n_values"] == 0 and "call atlas_lookup" in result["note"]
+
+
+def test_every_ollama_call_has_a_timeout():
+    """A stuck request (seen with qwen3:14b: Ollama idle, connection open) must fail, not hang."""
+    pytest.importorskip("langchain_ollama")
+    from cnms_fom.rag_backend.providers import OllamaProvider
+
+    client = OllamaProvider("llama3.1:8b")._client(0.0, None)
+    assert client.client_kwargs == {"timeout": get_settings().ollama_timeout_seconds}
+    assert get_settings().ollama_timeout_seconds == 300.0
+
+
+def test_a_server_that_never_answers_fails_the_call_instead_of_hanging(monkeypatch):
+    """The failure mode itself: a socket that accepts and then says nothing."""
+    pytest.importorskip("langchain_ollama")
+    import socket
+    import threading
+    import time
+
+    from cnms_fom.rag_backend.providers import OllamaProvider
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    held: list = []
+    threading.Thread(target=lambda: held.append(server.accept()), daemon=True).start()
+    monkeypatch.setenv("OLLAMA_BASE_URL", f"http://127.0.0.1:{server.getsockname()[1]}")
+    monkeypatch.setenv("OLLAMA_TIMEOUT_SECONDS", "1")
+    get_settings.cache_clear()
+    started = time.monotonic()
+    with pytest.raises(Exception) as caught:
+        OllamaProvider("llama3.1:8b").send("system", [{"role": "user", "content": "hello"}])
+    assert time.monotonic() - started < 10
+    assert "timed out" in str(caught.value).lower() or "timeout" in type(caught.value).__name__.lower()
+    server.close()
+
+
+def test_framings_that_quote_names_titles_and_lines_are_not_claims():
+    """Two qwen3:14b framings the first version of the check withheld wrongly (2026-10-02)."""
+    from cnms_fom.rag_backend.answer_checks import unsupported_claims
+
+    step = _step(lookup("TiO2", "n_633nm"))
+    copied = (
+        "The refractive index (n) of TiO2 at 633 nm is reported for rutile. No dataset explicitly labeled "
+        '"anatase" is present in the provided reference values.\n\n- ' + "\n- ".join(step.result["summary"])
+    )
+    assert unsupported_claims(copied, [step]) == []
+    absent = "For rutile there are two values. Anatase's refractive index at this wavelength is absent in the given dataset."
+    assert unsupported_claims(absent, [step]) == []
+    #  The checks still catch the claim they exist for, and a negation does not leak across sentences.
+    assert unsupported_claims("There is anatase data too.", [step]) == [
+        "'anatase': no returned dataset or value is labelled anatase"
+    ]
+    assert unsupported_claims("The release has no brookite. Anatase data are given.", [step]) == [
+        "'anatase': no returned dataset or value is labelled anatase"
+    ]
+
+
+# --- the third end-to-end round (llama3.1:8b, full suite) -------------------------------------
+
+
+def test_a_lookup_with_nothing_stored_says_so_and_k_carries_its_status():
+    summary = lookup("fused silica", "k")["summary"]
+    assert summary == [
+        "Silicon dioxide (fused silica) (id 38): no stored k_633nm in materials-db v0.22.0",
+        "Silicon dioxide (fused silica) (id 38): k status = not_measured; a missing k is unknown, not 0 "
+        "(materials-db v0.22.0)",
+    ]
+
+
+def test_coverage_gives_ready_to_quote_lines():
+    result = run_tool(None, "atlas_coverage", {"material": "Water"})
+    assert result["summary"][0].startswith("Water (id 232): ")
+    assert "optical datasets" in result["summary"][0] and "k status partially_measured" in result["summary"][0]
+
+
+def test_a_coverage_answer_is_composed_from_its_lines():
+    provider = ScriptedProvider(
+        [tool_reply("atlas_coverage", {"material": "Water"}), text_reply("draft"), text_reply("Water is well covered.")]
+    )
+    answer = ask(None, "What does the atlas hold for water?", provider=provider)
+    assert answer.composed is True and answer.reference_values[0].startswith("Water (id 232): ")
+
+
+def test_a_model_reported_gap_still_shows_the_releases_own_facts():
+    provider = ScriptedProvider(
+        [
+            tool_reply("atlas_lookup", {"material": "unobtainium", "quantity": "density"}),
+            tool_reply("atlas_lookup", {"material": "fused silica", "quantity": "k"}),
+            text_reply("k is not stored. [DATA GAP: no k value]"),
+        ]
+    )
+    answer = ask(None, "What is k of fused silica?", provider=provider)
+    assert answer.insufficient_context is True and answer.composed is False
+    assert "**Reference values**" in answer.answer
+    assert "k status = not_measured; a missing k is unknown, not 0" in answer.answer

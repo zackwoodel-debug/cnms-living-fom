@@ -161,6 +161,35 @@ atlas value into `property_values`. A formula that names several materials retur
 material the release does not contain comes back absent, with the release's own reason where it
 recorded one. A missing or stale index is an error the model has to report, not "no data".
 
+### Answers that rest on atlas values: code writes the facts, the model frames them
+
+A local 8B model restates structured output unreliably: on the atlas evals llama3.1:8b
+gave values to the right digits but dropped material ids, reported "anatase data" for a
+material whose datasets are all rutile (the phase is in its name), and called a
+consensus the release classes suspicious "agreeing". So when every tool result behind
+an answer is an atlas lookup, the answer is composed (`rag_backend/compose.py`):
+
+- the facts are the lookup's own `summary` lines, quoted verbatim under **Reference
+  values** — name and id, scope, value, grade or kind with its meaning, source;
+- the model writes only a short framing from those lines, in a second call with no
+  tools;
+- the framing is checked (`rag_backend/answer_checks.py`) and, if it asserts a number,
+  id, grade, agreement class, phase or axis no tool returned, it is withheld (kept on
+  `suppressed_answer`) and a template framing stands in.
+
+Two lookups that a local model used to turn into errors or guesses answer with what is
+stored instead: n or k at a wavelength other than 633 nm ("no scalar n at 1550 nm is stored;
+these datasets have rows spanning it"), and a phase the question or a material's name mentions
+but no dataset carries. When `lookup_property_values` finds no CNMS record, its note points the
+model to `atlas_lookup` for published reference values.
+
+With mixed evidence (atlas values *and* corpus passages or records) the model's answer
+connects them, so it stays; it is checked the same way, any finding is named in the text
+(`[Unsupported numbers: …]`, `[Unsupported claims: …]`), and the verbatim atlas lines are
+appended. The response carries `composed`, `reference_values`, `unsupported_numbers` and
+`unsupported_claims`. The checks narrow what can go wrong; they cannot read meaning, so a
+claim no check covers still passes — which is why the verbatim values are what to trust.
+
 `descriptor_dictionary` exists so the assistant uses the platform's vocabulary
 instead of inventing a plausible-looking key: "the band gap" resolves to `Eg`
 with its declared units, not to free text.
@@ -324,6 +353,11 @@ works and sequentially scans, which looks fine on a test corpus and falls over a
 **Cost.** Grading costs one model call per candidate. `grade=false` on
 `/rag/search` turns it off, which is right for exploratory search a human will read
 and wrong when a model is about to write an answer from the results.
+
+**A stuck model call.** Every Ollama call fails after `OLLAMA_TIMEOUT_SECONDS` (default 300)
+without receiving anything, so a stuck request — seen with qwen3:14b: Ollama idle, the
+connection still open — ends in a 503 instead of holding `/rag/chat` forever. It bounds
+silence, not total time; a model still streaming tokens is not cut off.
 
 **Diagnosing a miss.** `POST /rag/search` with `diagnostics: true` returns each
 retriever's own ranking beside the fused one, plus the tokenised query. Run it

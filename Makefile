@@ -4,7 +4,7 @@
 .PHONY: help install install-all test lint typecheck format \
         db-init db-migrate db-revision db-seed db-example serve frontend \
         up down logs compliance ingest-survey import-fits compare-fits ask \
-        cards clean smoke-suite
+        cards clean atlas eval eval-e2e smoke-suite
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -61,6 +61,15 @@ compare-fits:  ## Cross-technique agreement for one sample. SAMPLE=HFO2-PILOT-07
 
 ask:  ## Ask the research assistant. Q="your question"  (exit 2 = data gap)
 	cnms-fom ask "$(Q)"
+
+atlas:  ## Build the materials atlas (vault + index) from the materials-db release
+	cnms-fom atlas build
+
+eval:  ## Atlas evals, deterministic, every question; exit 1 on any miss
+	python materials-atlas/evals/run_evals.py --suite full --gate
+
+eval-e2e:  ## Atlas evals through the assistant; exit 1 below baseline. MODEL=llama3.1:8b
+	python materials-atlas/evals/run_evals.py --suite full --e2e --gate $(if $(MODEL),--model $(MODEL),)
 
 cards:  ## Knowledge cards awaiting review — the backlog that gates citability
 	cnms-fom cards list --status proposed

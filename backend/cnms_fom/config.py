@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_chat_model: str = "llama3.1:8b"
     ollama_embed_model: str = "nomic-embed-text"
+    #  How long one model call may go without receiving anything before it fails. Without
+    #  it a stuck request (observed: Ollama idle, the connection still open) blocks a
+    #  /rag/chat request forever; with it the call fails loudly — /rag/chat answers 503, a
+    #  framing falls back to its template. It bounds silence, not total time: a model that
+    #  is still streaming tokens (a thinking model can for minutes) is not cut off.
+    ollama_timeout_seconds: float = 300.0
     #  Optional small model for relevance grading and query rewriting. Those are
     #  classification tasks — "does this passage answer the question, 0-3" — and
     #  they run once per retrieved candidate, so they dominate the wall clock

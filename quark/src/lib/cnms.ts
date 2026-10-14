@@ -96,14 +96,10 @@ export async function askAssistant({
   };
 }
 
-function formatValue(citation: EvidenceCitation): string {
-  if (citation.value === null || citation.value === undefined) return "no stored value";
-  const unit = citation.unit && citation.unit !== "dimensionless" ? ` ${citation.unit}` : "";
-  return `${citation.value}${unit}`;
-}
-
-// The evidence behind an answer, as Markdown appended under it: which tools ran, and every
-// atlas value or document passage the answer could rest on, with its grade and citability.
+// The evidence behind an answer, as Markdown appended under it: which tools ran, how
+// long it took, and every document passage it could rest on. Atlas values are not
+// repeated here: the backend already quotes them verbatim inside the answer, under
+// "Reference values", so the reader sees exactly what the tools returned.
 export function evidenceMarkdown(turn: AssistantTurn): string {
   const lines: string[] = ["", "---", ""];
   const tools = turn.toolsUsed.length ? turn.toolsUsed.join(", ") : "none";
@@ -112,23 +108,7 @@ export function evidenceMarkdown(turn: AssistantTurn): string {
   if (turn.insufficientContext) {
     lines.push("", "_Data gap: the retrieved evidence does not answer this question._");
   }
-  const atlas = turn.citations.filter((c) => c.kind === "atlas_value");
   const passages = turn.citations.filter((c) => c.kind === "document");
-  if (atlas.length) {
-    lines.push("");
-    for (const c of atlas.slice(0, 12)) {
-      const [, quantity = "", stored = ""] = c.citation.split(" :: ");
-      const label = stored.startsWith(quantity)
-        ? stored
-        : [quantity, stored].filter(Boolean).join(" · ");
-      const grade = c.grade ? ` · grade ${c.grade}` : "";
-      const kind = c.value_kind ? ` · ${c.value_kind}` : "";
-      const cite = c.citable ? "citable" : "not citable";
-      lines.push(
-        `- ${c.material ?? "material"} (id ${c.material_id ?? "?"}): ${label} = ${formatValue(c)}${grade}${kind} · ${cite} · ${c.origin ?? "reference"}`,
-      );
-    }
-  }
   if (passages.length) {
     lines.push("");
     for (const c of passages.slice(0, 8)) {

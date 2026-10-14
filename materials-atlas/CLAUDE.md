@@ -367,6 +367,15 @@ synonym ("fused silica", "galena"), formula with several materials (TiO2 rutile 
 As2S3 and where it comes from"), limits ("is k measured for X?" -> "not measured", never 0), a model-fit-only material (CdTe), a
 single-source value, the suspicious consensus row (k of As2Se3), a catalog glass by maker code, and a material not in the atlas
 (must say so). In v0.22.0, TiO2 is one material with rutile data only; the several-materials formulas are C and C3H7OH.
+
+As built (2026-10-02): 106 questions — 40 hand-written (including 10 adversarial) in `questions.yaml`, 66 generated from the
+release by plain SQL in `questions_generated.yaml` (`make_questions.py`, fixed seed, byte-identical per release). `--gate`
+holds deterministic results to 100% and end-to-end results to a per-model baseline in `baselines.json`; CI runs the
+deterministic gate on the fixture index. Because llama3.1:8b restates tool output unreliably, an answer that rests only on
+atlas lookups is composed: the values are the lookup's `summary` lines quoted verbatim, the model writes a checked framing
+(`rag_backend/compose.py`, `rag_backend/answer_checks.py`), and a framing that asserts anything no tool returned is withheld.
+End-to-end results therefore report the system (what the reader sees) and the model (framings withheld, claims flagged)
+separately.
 Report retrieval hit@1/hit@5 and, for end-to-end, whether the answer quotes the right id, label and value. Never tune the data to
 pass an eval; tune the index, tools or prompt, and say which.
 

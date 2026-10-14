@@ -317,6 +317,9 @@ def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
         usage=answer.usage,
         suppressed_answer=answer.suppressed_answer,
         unsupported_numbers=answer.unsupported_numbers,
+        unsupported_claims=answer.unsupported_claims,
+        reference_values=answer.reference_values,
+        composed=answer.composed,
     )
 
 
