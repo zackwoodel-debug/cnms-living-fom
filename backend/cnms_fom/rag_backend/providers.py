@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
@@ -138,6 +139,9 @@ class ChatProvider(Protocol):
 # ---------------------------------------------------------------------------
 
 
+_THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
 class OllamaProvider:
     """Local Ollama through ``langchain_ollama.ChatOllama``.
 
@@ -152,6 +156,7 @@ class OllamaProvider:
         settings = get_settings()
         self.model = model or settings.ollama_chat_model
         self._base_url = settings.ollama_base_url
+        self._timeout = settings.ollama_timeout_seconds
 
     def _client(self, temperature: float, tools: list[ToolSpec] | None):
         try:
@@ -159,7 +164,12 @@ class OllamaProvider:
         except ImportError as exc:  # pragma: no cover - optional extra
             raise ImportError("RAG needs the 'rag' extra: pip install -e '.[rag]'") from exc
 
-        chat = ChatOllama(model=self.model, base_url=self._base_url, temperature=temperature)
+        chat = ChatOllama(
+            model=self.model,
+            base_url=self._base_url,
+            temperature=temperature,
+            client_kwargs={"timeout": self._timeout},
+        )
         if not tools:
             return chat
         try:
@@ -217,6 +227,9 @@ class OllamaProvider:
 
         response = self._client(temperature, tools).invoke(converted)
         text = response.content if isinstance(response.content, str) else str(response.content)
+        #  A thinking model (qwen3, deepseek-r1) can return its reasoning inline. It is not
+        #  the answer, and the answer checks must not read it as one.
+        text = _THINK.sub("", text).strip()
         calls = [
             ToolInvocation(
                 id=call.get("id") or f"call_{index}",
