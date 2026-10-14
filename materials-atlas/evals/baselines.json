@@ -1,4 +1,23 @@
 {
-  "deterministic": {"search_hit@1_min": 1.0},
-  "end_to_end": {}
+  "deterministic": {
+    "search_hit@1_min": 1.0
+  },
+  "end_to_end": {
+    "llama3.1:8b": {
+      "full": {
+        "framing_withheld_rate": 0.071,
+        "pass_rate": 0.968,
+        "questions": 95,
+        "release": "0.22.0"
+      }
+    },
+    "qwen3:14b": {
+      "smoke": {
+        "framing_withheld_rate": 0.0,
+        "pass_rate": 0.966,
+        "questions": 29,
+        "release": "0.22.0"
+      }
+    }
+  }
 }

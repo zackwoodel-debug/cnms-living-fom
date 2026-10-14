@@ -5,10 +5,10 @@ Each follows the audit in `docs/suite-integration-audit.md`.
 
 | # | Prompt | Status |
 |---|---|---|
-| 1 | Scientific provenance contract | pending approval |
-| 2 | Harden the materials-db to ModalFit export path | pending approval |
-| 3 | Source-backed catalog expansion pipeline | pending approval |
-| 4 | First integrated suite workflow (vertical slice) | pending approval |
+| 1 | Scientific provenance contract | done: materials-db PR #83, merged 2026-10-12 (release 0.23.0) |
+| 2 | Harden the materials-db to ModalFit export path | done: materials-db PR #83, merged 2026-10-12 |
+| 3 | Source-backed catalog expansion pipeline | done: materials-db PR #83, merged 2026-10-12 (releases to 0.27.0) |
+| 4 | First integrated suite workflow (vertical slice) | done: this repo PR #5, merged 2026-10-12; bulk-shard evidence in PR #6, merged 2026-10-14 |
 
 ---
 

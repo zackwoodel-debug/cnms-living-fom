@@ -271,13 +271,17 @@ export interface SuiteDataset {
   raw_file: string | null;
   conditions: Record<string, { state: string; value: string | number | null; unit: string | null }>;
   optical: { wavelength_nm: [number, number]; rows: number; k_missing_rows: number } | null;
+  values?: { density_g_cm3: number | null; xray_sld: number | null; neutron_sld: number | null };
   open_findings: { finding_id: number; severity: string | null; code: string | null; message: string | null }[];
   cnms: { label: string; tier: string | null; destination: string; reviewed: boolean; reasons: string[]; kind: BadgeKind };
 }
 
 export interface SuiteEvidence {
+  release?: string;
   material: { material_id: number; name: string; formula: string | null };
   datasets: SuiteDataset[];
+  structure?: Record<string, number | null> | null;
+  calculated_properties?: Record<string, number | string | null> | null;
 }
 
 export interface ReadinessCandidate {
